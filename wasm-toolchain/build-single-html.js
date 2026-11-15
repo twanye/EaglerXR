@@ -114,6 +114,20 @@ function read(name) {
   return fs.readFileSync(file);
 }
 
+function readSounds() {
+  const soundsFile = path.join(webDir, "sounds.epk");
+  if (fs.existsSync(soundsFile)) return fs.readFileSync(soundsFile);
+  // Some source-only workspaces package all browser-reachable resources in
+  // assets.epk and do not emit the optional split sounds archive. The runtime
+  // can safely consume the same EPK bytes for both logical payloads.
+  const assetsFile = path.join(webDir, "assets.epk");
+  if (fs.existsSync(assetsFile)) {
+    console.warn("[single-html] sounds.epk missing; reusing assets.epk for the sound payload");
+    return fs.readFileSync(assetsFile);
+  }
+  fail(`missing ${soundsFile} (and fallback ${assetsFile})`);
+}
+
 function newestSourceMtime(entry) {
   if (!fs.existsSync(entry)) return 0;
   const stat = fs.statSync(entry);
@@ -341,7 +355,7 @@ const meshWasm = read("mesh-worker.wasm");
 // dedicated server image is therefore required for hosted and standalone use.
 const serverWasm = read("server-worker.wasm");
 const assets = read("assets.epk");
-const sounds = read("sounds.epk");
+const sounds = readSounds();
 if (!fs.existsSync(musicSource)) {
   fail(`missing music EPK at ${musicSource}; build the regular TeaVM web assets first`);
 }
