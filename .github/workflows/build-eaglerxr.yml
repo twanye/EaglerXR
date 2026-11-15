@@ -1,0 +1,54 @@
+name: Build EaglerXR HTML
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-html:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build standalone HTML
+        env:
+          # The upstream TeaVM linker requires more than the local 2 GiB limit.
+          # This build is intentionally delegated to the GitHub-hosted runner.
+          EAGLER_BUILD_CAP_MIB: '13312'
+        run: |
+          node wasm-toolchain/build-single-html.js \
+            --fast-package \
+            --output eaglercraft-26.2-single.html
+
+      - name: Verify HTML artifact
+        shell: bash
+        run: |
+          test -s eaglercraft-26.2-single.html
+          sha256sum eaglercraft-26.2-single.html > eaglercraft-26.2-single.html.sha256
+
+      - name: Upload built HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: eaglerxr-html
+          if-no-files-found: error
+          path: |
+            eaglercraft-26.2-single.html
+            eaglercraft-26.2-single.html.sha256
