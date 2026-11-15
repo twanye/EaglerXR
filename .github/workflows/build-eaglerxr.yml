@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Setup dependencies
+        run: npm install
+
       - name: Build standalone HTML
         env:
           # The upstream TeaVM linker requires more than the local 2 GiB limit.
