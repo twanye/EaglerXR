@@ -356,7 +356,7 @@ const meshWasm = read("mesh-worker.wasm");
 const serverWasm = read("server-worker.wasm");
 const assets = read("assets.epk");
 const sounds = readSounds();
-if (!fs.existsSync(musicSource)) {
+if (withMusic && !fs.existsSync(musicSource)) {
   fail(`missing music EPK at ${musicSource}; build the regular TeaVM web assets first`);
 }
 const music = withMusic ? fs.readFileSync(musicSource) : null;
