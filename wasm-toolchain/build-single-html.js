@@ -16,7 +16,7 @@ const webDir = path.join(repo, "target_teavm_wasm_gc", "build", "web");
 // deploy_wasm_web.sh intentionally removes music.epk from the Wasm-GC output.
 // Music remains produced by the regular TeaVM asset build and is shared with
 // both the inline compatibility client and the optional resource-pack ZIP.
-const musicSource = path.join(repo, "target_teavm", "build", "web", "music.epk");
+const musicDir = path.join(repo, "target_teavm", "build", "web");
 const args = new Set(process.argv.slice(2));
 const skipBuild = args.has("--skip-build") || args.has("--pack-only");
 const reuseClient = args.has("--reuse-client");
@@ -114,18 +114,22 @@ function read(name) {
   return fs.readFileSync(file);
 }
 
-function readSounds() {
-  const soundsFile = path.join(webDir, "sounds.epk");
-  if (fs.existsSync(soundsFile)) return fs.readFileSync(soundsFile);
-  // Some source-only workspaces package all browser-reachable resources in
-  // assets.epk and do not emit the optional split sounds archive. The runtime
-  // can safely consume the same EPK bytes for both logical payloads.
+// Resolve an EPK from its expected folder. If it is not there, fall back to
+// assets.epk (the archive that always ships with the web build) instead of
+// failing the build.
+function resolveEpk(dir, name) {
+  const wanted = path.join(dir, name);
+  if (fs.existsSync(wanted)) return { file: wanted, fallback: false };
   const assetsFile = path.join(webDir, "assets.epk");
   if (fs.existsSync(assetsFile)) {
-    console.warn("[single-html] sounds.epk missing; reusing assets.epk for the sound payload");
-    return fs.readFileSync(assetsFile);
+    console.warn(`[single-html] ${name} missing in ${dir}; reusing assets.epk instead`);
+    return { file: assetsFile, fallback: true };
   }
-  fail(`missing ${soundsFile} (and fallback ${assetsFile})`);
+  fail(`missing ${wanted} (and fallback ${assetsFile})`);
+}
+
+function readSounds() {
+  return fs.readFileSync(resolveEpk(webDir, "sounds.epk").file);
 }
 
 function newestSourceMtime(entry) {
@@ -356,9 +360,8 @@ const meshWasm = read("mesh-worker.wasm");
 const serverWasm = read("server-worker.wasm");
 const assets = read("assets.epk");
 const sounds = readSounds();
-if (withMusic && !fs.existsSync(musicSource)) {
-  fail(`missing music EPK at ${musicSource}; build the regular TeaVM web assets first`);
-}
+const musicEpk = resolveEpk(musicDir, "music.epk");
+const musicSource = musicEpk.file;
 const music = withMusic ? fs.readFileSync(musicSource) : null;
 const favicon = fs.readFileSync(path.join(repo, "game", "src", "main", "resources", "pack.png"));
 const decoderJs = browserDecoderSource(
@@ -720,7 +723,9 @@ console.log(`  music.epk:       ${(music ? music.length : 0).toLocaleString()} B
 console.log(`  output HTML:     ${outputBytes.toLocaleString()} B (${(outputBytes / 1_000_000).toFixed(2)} MB)`);
 console.log(`[single-html] wrote ${output}`);
 
-if (withoutMusic) {
+if (withoutMusic && musicEpk.fallback) {
+  console.warn("[single-html] music.epk missing; skipping optional music pack export (assets.epk has no music)");
+} else if (withoutMusic) {
   const musicPack = spawnSync(process.execPath, [
     path.join(repo, "wasm-toolchain", "export-music-resource-pack.js"),
     musicSource,
