@@ -53,7 +53,15 @@ const required = [
   "classes.wasm.br.meta", "mesh-worker.wasm.br.meta", "server-worker.wasm.br.meta",
   "favicon.png"
 ];
+// sounds.epk is optional: when it is not in the source folder, assets.epk is
+// used in its place (copied under the sounds.epk name below).
+const optionalEpks = new Set(["sounds.epk"]);
 for (const name of required) {
+  if (optionalEpks.has(name) && !existsSync(join(source, name))
+      && existsSync(join(source, "assets.epk"))) {
+    console.warn(`[iwa] ${name} missing in ${source}; reusing assets.epk instead`);
+    continue;
+  }
   if (!existsSync(join(source, name))) throw new Error(`Missing source artifact: ${join(source, name)}`);
 }
 for (const path of [runtimeGenerator, ...Object.values(rawWasm)]) {
@@ -93,7 +101,9 @@ for (const name of [
   "assets.epk", "sounds.epk", "favicon.png", "worker-bootstrap.js",
   "classes.wasm.br", "mesh-worker.wasm.br", "server-worker.wasm.br"
 ]) {
-  copyFileSync(join(source, name), join(dist, name));
+  const from = optionalEpks.has(name) && !existsSync(join(source, name))
+    ? join(source, "assets.epk") : join(source, name);
+  copyFileSync(from, join(dist, name));
 }
 const localeSource = existsSync(join(source, "lang"))
   ? join(source, "lang") : join(repo, "target_teavm/build/web/lang");
