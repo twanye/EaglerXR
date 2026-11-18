@@ -399,6 +399,12 @@
 			if (match) return Number(match[1]);
 			return -1;
 		}
+		// Firefox file:// launches have no reliable deviceMemory signal and commonly
+		// reject a second 100 MB Wasm compilation with InternalError: out of memory.
+		// Keep hosted/Quest launches on the worker path, but make local standalone
+		// downloads safe by compiling only the client image.
+		window.__eaglerLowMemoryShell = location.protocol === "file:" ||
+			(/Firefox\//.test(navigator.userAgent) && (!navigator.deviceMemory || navigator.deviceMemory <= 4));
 		// The hosted release may point this at a signed bundle on a separate
 		// large-file origin. An empty value keeps the preview download disabled.
 		window.eaglercraftXIwaBundleURL = "";
@@ -420,8 +426,8 @@
 			disableBlobURLs: true,
 			// ?singlethread disables all workers; ?nomesh disables mesh workers.
 			singleThreadMode: true,
-				serverWorker: window.location.search.indexOf("singlethread") < 0,
-				meshWorkers: window.location.search.indexOf("singlethread") < 0
+				serverWorker: !window.__eaglerLowMemoryShell && window.location.search.indexOf("singlethread") < 0,
+				meshWorkers: !window.__eaglerLowMemoryShell && window.location.search.indexOf("singlethread") < 0
 					&& window.location.search.indexOf("nomesh") < 0,
 				meshWorkerVerify: false,
 				perfDebug: window.__eaglerPerfEnabled,
@@ -472,14 +478,17 @@
 						throw new Error("worker-bootstrap.js helper missing");
 					}
 					let module;
-					const meshModulePromise = WebAssembly.compileStreaming(
+					const compileMesh = window.eaglercraftXOpts && window.eaglercraftXOpts.meshWorkers === true;
+					const compileServer = __EAGLER_SERVER_WORKER_AVAILABLE__ && window.eaglercraftXOpts
+						&& window.eaglercraftXOpts.serverWorker === true;
+					const meshModulePromise = compileMesh ? WebAssembly.compileStreaming(
 							fetch("mesh-worker.wasm?v=__EAGLER_BUILD_ID__"), { builtins: ["js-string"] }
 						).catch(async (meshStreamErr) => {
 							window.__log.push("W:[shell] mesh compileStreaming failed (" + meshStreamErr + "), falling back to byte fetch");
 							const meshResp = await fetch("mesh-worker.wasm?v=__EAGLER_BUILD_ID__");
 							return WebAssembly.compile(await meshResp.arrayBuffer(), { builtins: ["js-string"] });
-						});
-					const serverModulePromise = __EAGLER_SERVER_WORKER_AVAILABLE__ ? WebAssembly.compileStreaming(
+						}) : Promise.resolve(null);
+					const serverModulePromise = compileServer ? WebAssembly.compileStreaming(
 						fetch("server-worker.wasm?v=__EAGLER_BUILD_ID__"), { builtins: ["js-string"] }
 					).catch(async (serverStreamErr) => {
 						window.__log.push("W:[shell] server compileStreaming failed (" + serverStreamErr + "), falling back to byte fetch");
@@ -501,15 +510,16 @@
 						window.__log.push("L:[shell] fetched classes.wasm " + bytes.byteLength + " bytes");
 						module = await WebAssembly.compile(bytes, { builtins: ["js-string"] });
 					}
-					// Finish the two worker images concurrently with the full client. Keep the
-					// large client module local; worker bootstrap reads the smaller globals.
+					// Worker images are optional. Low-memory file:// launches intentionally
+					// leave them null so Firefox never compiles multiple large modules at once.
 					const workerModules = await Promise.all([meshModulePromise, serverModulePromise]);
 					window.__eaglerWasmModule = module;
 					window.__eaglerMeshWasmModule = workerModules[0];
 					window.__eaglerServerWasmModule = workerModules[1];
-					window.__log.push(__EAGLER_SERVER_WORKER_AVAILABLE__
+					window.__log.push(compileServer
 						? "L:[shell] dedicated mesh + server Wasm compiled"
-						: "L:[shell] dedicated mesh Wasm + shared full-image server module compiled");
+						: (window.__eaglerLowMemoryShell ? "L:[shell] low-memory mode: worker Wasm disabled"
+							: "L:[shell] dedicated mesh + shared full-image server module compiled"));
 					window.__eaglerWasmRuntimeURL = new URL("classes.wasm-runtime.js?v=__EAGLER_BUILD_ID__", location.href).href;
 					window.__eaglerWasmWorkerBootstrapURL = new URL("worker-bootstrap.js?v=__EAGLER_BUILD_ID__", location.href).href;
 					if (typeof window.__eaglerWasmServerWorkerBootstrapURL !== "string") {

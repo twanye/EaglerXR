@@ -145,6 +145,9 @@ public class ClientPlatformSingleplayer {
 	@JSBody(params = {}, script = "return (typeof Worker !== \"undefined\");")
 	private static native boolean workerSupportedJS();
 
+	@JSBody(params = {}, script = "try { return typeof window !== 'undefined' && window.__eaglerLowMemoryShell === true; } catch(e) { return false; }")
+	private static native boolean lowMemoryShellJS();
+
 	@JSBody(params = { "w", "str" }, script = "w.postMessage({ meta: str });")
 	private static native void postMetaToWorker(Worker w, String str);
 
@@ -752,7 +755,8 @@ public class ClientPlatformSingleplayer {
 		// Worker. Overrides single-thread mode when enabled and Worker is available;
 		// otherwise falls through to today's single-thread path (the fallback).
 		boolean wasmGC = net.lax1dude.eaglercraft.v1_8.internal.teavm.WasmWorkerBootstrap.isWasmGC();
-		boolean forceServerWorker = workerSupportedJS() && (wasmGC || isServerWorkerFlagJS());
+		boolean forceServerWorker = workerSupportedJS() && !lowMemoryShellJS()
+				&& (wasmGC || isServerWorkerFlagJS());
 		if(forceServerWorker) {
 			singleThreadMode = false;
 			logger.info("serverWorker mode ENABLED — integrated server will run in a Web Worker");
