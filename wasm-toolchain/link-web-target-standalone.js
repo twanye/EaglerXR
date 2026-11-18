@@ -141,7 +141,8 @@ withOperationLock(path.join(generated, "standalone-link-cache"), cacheOwner => {
     ":teavm-compat:jar",
     `:${target.project}:jar`,
     `:${target.project}:printStandaloneClasspaths`,
-    "--console=plain", "--no-daemon", "--max-workers=2",
+    "--console=plain", "--no-daemon", "--max-workers=1",
+    "-Dorg.gradle.jvmargs=-Xmx8192m -Xss8m -XX:MaxMetaspaceSize=1g -XX:+UseG1GC",
   ]));
   const toolClasspath = prepared.tool;
   let programClasspath = prepared.program;

@@ -78,7 +78,8 @@ function run(command, args, options = {}) {
 }
 
 function gradlePaths(task, properties = []) {
-  const output = run("./gradlew", [task, "--console=plain", "--no-daemon", "--max-workers=1", ...properties]);
+  const output = run("./gradlew", [task, "--console=plain", "--no-daemon", "--max-workers=1",
+    "-Dorg.gradle.jvmargs=-Xmx8192m -Xss8m -XX:MaxMetaspaceSize=1g -XX:+UseG1GC", ...properties]);
   const paths = output.split(/\r?\n/).map((line) => line.trim())
       .filter((line) => line.startsWith("/") && fs.existsSync(line));
   if (paths.length === 0) {
@@ -96,7 +97,8 @@ withOperationLock(path.join(generated, "standalone-link-cache"), cacheOwner => {
     ":teavm-compat:jar",
     ":target_teavm_wasm_gc_server:jar",
     ":target_teavm_wasm_gc_server:printStandaloneClasspaths",
-    "--console=plain", "--no-daemon", "--max-workers=2",
+    "--console=plain", "--no-daemon", "--max-workers=1",
+    "-Dorg.gradle.jvmargs=-Xmx8192m -Xss8m -XX:MaxMetaspaceSize=1g -XX:+UseG1GC",
   ]));
   const sliceProperties = [
     `-PeaglerSlimFastutilJar=${fastutilSlice}`,

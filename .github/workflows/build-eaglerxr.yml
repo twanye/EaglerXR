@@ -29,13 +29,25 @@ jobs:
           node-version: '22'
 
       - name: Setup dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Compile Java inputs with Gradle
+        run: |
+          ./gradlew \
+            :game:jar \
+            :platform:jar \
+            :platform-teavm:jar \
+            :teavm-compat:jar \
+            -Dorg.gradle.jvmargs='-Xmx8g -Xss8m -XX:MaxMetaspaceSize=1g -XX:+UseG1GC' \
+            --console=plain \
+            --no-daemon \
+            --max-workers=2
 
       - name: Build standalone HTML
         env:
-          # The upstream TeaVM linker requires more than the local 2 GiB limit.
-          # This build is intentionally delegated to the GitHub-hosted runner.
+          # Standalone TeaVM uses a separate capped JVM for whole-program linking.
           EAGLER_BUILD_CAP_MIB: '13312'
+          EAGLER_LINK_HEAP_MIB: '12288'
         run: |
           node wasm-toolchain/build-single-html.js \
             --fast-package \

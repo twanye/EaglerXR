@@ -186,7 +186,7 @@ function prepareBaseAssets() {
     "--no-daemon",
     "--max-workers=1",
     "-Dorg.gradle.parallel=false",
-    "-Dorg.gradle.jvmargs=-Xmx4096m -Xss4m -XX:MaxMetaspaceSize=768m -XX:+UseG1GC"
+    "-Dorg.gradle.jvmargs=-Xmx8192m -Xss8m -XX:MaxMetaspaceSize=1g -XX:+UseG1GC"
   ]);
   const packed = path.join(repo, "target_lwjgl_desktop", "build", "epk", "assets.epk");
   const hosted = path.join(repo, "target_teavm", "build", "web", "assets.epk");
