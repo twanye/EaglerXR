@@ -114,6 +114,16 @@ function read(name) {
   return fs.readFileSync(file);
 }
 
+function buildXRJS() {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "build-xrjs.js")], {
+    cwd: repo, stdio: "inherit", env: process.env
+  });
+  if (result.error) fail(result.error.message);
+  if (result.status !== 0) fail(`build-xrjs exited with code ${result.status}`);
+}
+
+buildXRJS();
+
 // Resolve an EPK from its expected folder. If it is not there, fall back to
 // assets.epk (the archive that always ships with the web build) instead of
 // failing the build.

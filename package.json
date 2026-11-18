@@ -9,6 +9,7 @@
     "build:single": "node wasm-toolchain/build-single-html.js",
     "build:release:web:tested": "node wasm-toolchain/build-single-html.js --reuse-client --reuse-mesh --reuse-server",
     "pack:single": "node wasm-toolchain/build-single-html.js --skip-build",
+    "build:xrjs": "node wasm-toolchain/build-xrjs.js",
     "build:single:lean": "node wasm-toolchain/build-single-html.js",
     "pack:single:lean": "node wasm-toolchain/build-single-html.js --skip-build"
   },

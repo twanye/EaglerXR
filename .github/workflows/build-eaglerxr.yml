@@ -43,6 +43,9 @@ jobs:
             --no-daemon \
             --max-workers=2
 
+      - name: Build standalone WebXR JavaScript
+        run: npm run build:xrjs
+
       - name: Build standalone HTML
         env:
           # Standalone TeaVM uses a separate capped JVM for whole-program linking.
@@ -67,3 +70,4 @@ jobs:
           path: |
             eaglercraft-26.2-single.html
             eaglercraft-26.2-single.html.sha256
+            xrjs/eaglerxr-webxr.js
