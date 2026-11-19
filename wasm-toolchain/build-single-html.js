@@ -408,6 +408,19 @@ html = html.replace(
   `<script type="text/javascript">\n${workerJs}\n</script>`
 );
 
+// The game tab opens the VR companion tab (eaglerxr-companion.html, written next to the
+// output file below) and receives its WebXR poses. Inline the link script so the
+// standalone file does not request a sibling .js file.
+const xrLinkJs = fs.readFileSync(path.join(repo, "target_teavm_wasm_gc", "src", "web", "eaglerxr_link.js"), "utf8")
+  .replace(/<\/script/gi, "<\\/script");
+if (!/<script type="text\/javascript" src="eaglerxr_link\.js(?:\?v=[^"]+)?"><\/script>/.test(html)) {
+  fail("eaglerxr_link.js script tag is missing from index.html");
+}
+html = html.replace(
+  /<script type="text\/javascript" src="eaglerxr_link\.js(?:\?v=[^"]+)?"><\/script>/,
+  () => `<script type="text/javascript">\n${xrLinkJs}\n</script>`
+);
+
 if (withoutMusic) {
   html = html.replace(
     '{ url: "sounds.epk", path: "" },\n\t\t\t\t{ url: "music.epk", path: "" }',
@@ -712,6 +725,10 @@ html = html.replace(
 
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, html);
+const companionSource = path.join(repo, "target_teavm_wasm_gc", "src", "web", "eaglerxr-companion.html");
+const companionOutput = path.join(path.dirname(output), "eaglerxr-companion.html");
+fs.copyFileSync(companionSource, companionOutput);
+console.log(`[single-html] wrote VR companion ${companionOutput}`);
 const outputBytes = fs.statSync(output).size;
 // Wasm + game assets + effects expand by 4/3 in base64. Music is deliberately
 // outside this ceiling because it ships as the optional ZIP beside the client.

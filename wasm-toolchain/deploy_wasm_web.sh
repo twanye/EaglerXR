@@ -30,6 +30,8 @@ mkdir -p "$WEB" "$WEB/lang"
 #    — server worker + mesh pool — is spawned from)
 cp "$SRC/index.html" "$WEB/index.html"
 cp "$SRC/worker-bootstrap.js" "$WEB/worker-bootstrap.js"
+cp "$SRC/eaglerxr_link.js" "$WEB/eaglerxr_link.js"
+cp "$SRC/eaglerxr-companion.html" "$WEB/eaglerxr-companion.html"
 cp "$REPO/game/src/main/resources/pack.png" "$WEB/favicon.png"
 
 # 2. wasm binary (symlink -> the freshly generated one; the client emits only classes.wasm)
