@@ -60,6 +60,7 @@ jobs:
         shell: bash
         run: |
           test -s eaglercraft-26.2-single.html
+          test -s eaglerxr-companion.html
           sha256sum eaglercraft-26.2-single.html > eaglercraft-26.2-single.html.sha256
 
       - name: Upload built HTML
@@ -70,4 +71,5 @@ jobs:
           path: |
             eaglercraft-26.2-single.html
             eaglercraft-26.2-single.html.sha256
+            eaglerxr-companion.html
             xrjs/eaglerxr-webxr.js
