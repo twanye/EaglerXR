@@ -35,7 +35,6 @@ package net.lax1dude.eaglercraft.v1_8.internal;
  *   +15     reserved
  * </pre>
  */
- */
 public final class PlatformWebXR {
 
 	public static final int VIEW_STRIDE = 27;
