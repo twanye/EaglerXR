@@ -97,6 +97,12 @@ public final class WebXRBridge {
 		B.views = null;
 		var S = B.stereoApi = {};
 		var CAPS = null;
+		// Load-stage breadcrumb + on-screen error overlay (index.html early diagnostics), if present.
+		S.stage = function (n) { try { if (globalThis.__eaglerXRStage) globalThis.__eaglerXRStage(n); } catch (e) { } };
+		S.report = function (where, e) {
+		  try { console.error('eaglerxr: ' + where, e); } catch (x) { }
+		  try { if (globalThis.__eaglerXRReportError) globalThis.__eaglerXRReportError('webxr:' + where, e); } catch (x) { }
+		};
 		S.supported = function () {
 		  return !!(B.gl && globalThis.navigator && navigator.xr && typeof navigator.xr.requestSession === 'function' && typeof XRWebGLLayer === 'function');
 		};
@@ -270,13 +276,13 @@ public final class WebXRBridge {
 		    if (!g.getProgramParameter(p, g.LINK_STATUS)) { console.error('eaglerxr: overlay program failed: ' + g.getProgramInfoLog(p)); return null; }
 		    return p;
 		  }
-		  var H = '#version 300 es\nprecision highp float;\n';
-		  var pp = prog(H + 'uniform mat4 u_mvp;uniform vec2 u_size;out vec2 v_uv;void main(){int i=gl_VertexID;vec2 p=vec2((i==1||i==4||i==5)?1.0:0.0,(i==2||i==3||i==5)?1.0:0.0);v_uv=p;gl_Position=u_mvp*vec4((p.x-0.5)*u_size.x,(p.y-0.5)*u_size.y,0.0,1.0);}\n',
+		  var H = '#version 300 es\\nprecision highp float;\\n';
+		  var pp = prog(H + 'uniform mat4 u_mvp;uniform vec2 u_size;out vec2 v_uv;void main(){int i=gl_VertexID;vec2 p=vec2((i==1||i==4||i==5)?1.0:0.0,(i==2||i==3||i==5)?1.0:0.0);v_uv=p;gl_Position=u_mvp*vec4((p.x-0.5)*u_size.x,(p.y-0.5)*u_size.y,0.0,1.0);}\\n',
 		    H + 'uniform sampler2D u_tex;uniform vec2 u_size;uniform float u_back;uniform vec3 u_c0;uniform vec3 u_c1;in vec2 v_uv;out vec4 o;'
 		    + 'vec4 cur(vec4 c,vec3 k){if(k.z<0.5)return c;float d=length((v_uv-k.xy)*u_size);if(d<0.011)return d<0.007?vec4(1.0):vec4(0.0,0.0,0.0,1.0);return c;}'
-		    + 'void main(){vec4 c=texture(u_tex,v_uv);c+=vec4(0.0,0.0,0.0,u_back)*(1.0-c.a);c=cur(c,u_c0);c=cur(c,u_c1);o=c;}\n');
-		  var lp = prog(H + 'uniform mat4 u_vp;uniform vec3 u_a;uniform vec3 u_b;void main(){gl_Position=u_vp*vec4(gl_VertexID==0?u_a:u_b,1.0);}\n',
-		    H + 'uniform vec4 u_col;out vec4 o;void main(){o=u_col;}\n');
+		    + 'void main(){vec4 c=texture(u_tex,v_uv);c+=vec4(0.0,0.0,0.0,u_back)*(1.0-c.a);c=cur(c,u_c0);c=cur(c,u_c1);o=c;}\\n');
+		  var lp = prog(H + 'uniform mat4 u_vp;uniform vec3 u_a;uniform vec3 u_b;void main(){gl_Position=u_vp*vec4(gl_VertexID==0?u_a:u_b,1.0);}\\n',
+		    H + 'uniform vec4 u_col;out vec4 o;void main(){o=u_col;}\\n');
 		  if (!pp || !lp) { B.ovFailed = true; return false; }
 		  B.ovPanel = pp; B.ovLine = lp; B.ovVao = g.createVertexArray();
 		  B.ovU = {
@@ -445,16 +451,19 @@ public final class WebXRBridge {
 		  if (!S.supported()) { B.msg = 'Immersive VR needs a WebXR browser and the WebGL 2 renderer.'; return false; }
 		  var g = B.gl, sess = null, ended = false;
 		  B.pending = true; B.msg = 'Starting VR...'; S.updateButton();
+		  S.stage('xr-request-session');
 		  var req;
 		  try { req = navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] }); }
 		  catch (e) { B.pending = false; B.msg = 'Could not start VR: ' + (e && e.message || e); S.updateButton(); return false; }
 		  req.then(function (s) {
 		    sess = s; s.__eaglerStereo = true;
 		    S.hookInputEvents(s);
-		    s.addEventListener('end', function () { ended = true; if (B.session === s || B.pending) S.cleanup('VR session ended.'); });
+		    s.addEventListener('end', function () { ended = true; S.stage('xr-session-ended'); if (B.session === s || B.pending) S.cleanup('VR session ended.'); });
+		    S.stage('xr-make-xr-compatible');
 		    return g.makeXRCompatible ? g.makeXRCompatible() : null;
 		  }).then(function () {
 		    if (ended) throw new Error('session ended during setup');
+		    S.stage('xr-create-layer');
 		    var layer = new XRWebGLLayer(sess, g, { antialias: false, depth: false, stencil: false, alpha: false });
 		    return sess.updateRenderState({ baseLayer: layer }).then(function () { return layer; });
 		  }).then(function (layer) {
@@ -465,8 +474,11 @@ public final class WebXRBridge {
 		    B.session = sess; B.ref = ref; B.frame = 0; B.controllers = []; B.sd[0] = 0;
 		    B.active = true; B.stereo = true; B.pending = false; B.msg = null;
 		    sess.requestAnimationFrame(S.onFrame);
+		    S.stage('xr-presenting');
 		    S.updateButton();
 		  }).catch(function (e) {
+		    S.stage('xr-start-failed');
+		    S.report('enter VR failed', e);
 		    B.pending = false; B.layer = null;
 		    B.msg = 'Could not start VR: ' + (e && e.message || e);
 		    if (sess && !ended) { try { sess.end(); } catch (x) { } }
@@ -476,7 +488,11 @@ public final class WebXRBridge {
 		};
 		S.exit = function () { if (B.stereo && B.session) { try { B.session.end(); } catch (e) { } } };
 		S.requestFrame = function (cb) { if (B.stereo && B.session) { B.vsync.push(cb); return true; } return false; };
-		S.setWorld = function (on) { B.world = !!on; if (!on) B.atlasReady = false; S.updateButton(); };
+		S.setWorld = function (on) {
+		  B.world = !!on; if (!on) B.atlasReady = false;
+		  if (on && !B.probed && !B.probeTimer) B.probeTimer = setTimeout(function () { B.probeTimer = 0; if (B.world) S.probe(); }, 4000);
+		  S.updateButton();
+		};
 		S.updateButton = function () {
 		  var show = B.xrOk && B.world && !B.active && !B.pending && !!B.gl;
 		  if (!B.btn) {
@@ -490,33 +506,43 @@ public final class WebXRBridge {
 		  }
 		  B.btn.style.display = show ? 'block' : 'none';
 		};
-		globalThis.eaglerXREnterVR = S.enter;
+		// Asking the browser whether immersive VR is supported is deferred until the player
+		// is in a world (never during loading); it only decides whether to show the
+		// floating "Enter VR" button. Everything else (makeXRCompatible, layers,
+		// framebuffers, sessions) waits for the Enter VR press.
+		S.probe = function () {
+		  if (B.probed) return;
+		  B.probed = true;
+		  try {
+		    if (!(globalThis.navigator && navigator.xr && typeof navigator.xr.isSessionSupported === 'function')) return;
+		    navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { B.xrOk = false; });
+		    if (navigator.xr.addEventListener) navigator.xr.addEventListener('devicechange', function () {
+		      try { navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { }); } catch (e) { }
+		    });
+		  } catch (e) { B.xrOk = false; S.report('isSessionSupported failed', e); }
+		};
+		globalThis.eaglerXREnterVR = function () { try { return S.enter(); } catch (e) { B.pending = false; S.report('enter VR threw', e); return false; } };
 		globalThis.eaglerXRExitVR = S.exit;
-		if (globalThis.navigator && navigator.xr && typeof navigator.xr.isSessionSupported === 'function') {
-		  navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { B.xrOk = false; });
-		  if (navigator.xr.addEventListener) navigator.xr.addEventListener('devicechange', function () {
-		    navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { });
-		  });
-		}
+		S.stage('xr-api-installed');
 		""")
 	public static native void installStereo(JSObject gl);
 
-	@JSBody(script = "var B=globalThis.__eaglerXR;return !!(B&&B.stereoApi&&B.stereoApi.supported());")
+	@JSBody(script = "var B=globalThis.__eaglerXR;try{return !!(B&&B.stereoApi&&B.stereoApi.supported());}catch(e){return false;}")
 	public static native boolean isStereoSupported();
 
 	@JSBody(script = "var B=globalThis.__eaglerXR;return !!(B&&B.stereo&&B.layer);")
 	public static native boolean isStereoPresenting();
 
-	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereoApi?B.stereoApi.enter():false;")
+	@JSBody(script = "var B=globalThis.__eaglerXR;try{return B&&B.stereoApi?!!B.stereoApi.enter():false;}catch(e){if(B){B.pending=false;B.msg='Could not start VR: '+(e&&e.message||e);if(B.stereoApi)B.stereoApi.report('enter VR threw',e);}return false;}")
 	public static native boolean enterStereoSession();
 
-	@JSBody(script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.exit();")
+	@JSBody(script = "var B=globalThis.__eaglerXR;try{if(B&&B.stereoApi)B.stereoApi.exit();}catch(e){}")
 	public static native void exitStereoSession();
 
 	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.msg?String(B.msg):null;")
 	public static native String stereoStatusMessage();
 
-	@JSBody(params = { "on" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.setWorld(on);")
+	@JSBody(params = { "on" }, script = "var B=globalThis.__eaglerXR;try{if(B&&B.stereoApi)B.stereoApi.setWorld(on);}catch(e){if(B&&B.stereoApi)B.stereoApi.report('setWorld failed',e);}")
 	public static native void setStereoWorldActive(boolean on);
 
 	/** Latest controller snapshot (2 slots x 16 floats, see PlatformWebXR), or null. */
@@ -527,14 +553,14 @@ public final class WebXRBridge {
 	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereo&&B.sd?B.sd:null;")
 	public static native Float32Array stereoFrameData();
 
-	@JSBody(params = { "view", "tex", "width", "height" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.copyEye(view,tex,width,height);")
+	@JSBody(params = { "view", "tex", "width", "height" }, script = "var B=globalThis.__eaglerXR;try{if(B&&B.stereoApi)B.stereoApi.copyEye(view,tex,width,height);}catch(e){if(!B.copyEyeErr){B.copyEyeErr=1;B.stereoApi.report('copyEye failed',e);}}")
 	public static native void copyEye(int view, JSObject tex, int width, int height);
 
 	/** Latest VR GUI panel / pointer data (8 floats, see PlatformWebXR), or null. */
 	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereo&&B.gd?B.gd:null;")
 	public static native Float32Array stereoGuiData();
 
-	@JSBody(params = { "tex", "width", "height", "mode", "laser", "aim" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.copyGui(tex,width,height,mode,laser,aim);")
+	@JSBody(params = { "tex", "width", "height", "mode", "laser", "aim" }, script = "var B=globalThis.__eaglerXR;try{if(B&&B.stereoApi)B.stereoApi.copyGui(tex,width,height,mode,laser,aim);}catch(e){if(!B.copyGuiErr){B.copyGuiErr=1;B.stereoApi.report('copyGui failed',e);}}")
 	public static native void copyGui(JSObject tex, int width, int height, int mode, float laser, int aim);
 
 	/**
@@ -548,6 +574,24 @@ public final class WebXRBridge {
 	public static native double configValue(String key, double def);
 
 	/** Queues {@code cb} for the next XR animation frame; returns false when no stereo session is presenting. */
-	@JSBody(params = { "cb" }, script = "var B=globalThis.__eaglerXR;return !!(B&&B.stereoApi&&B.stereoApi.requestFrame(cb));")
+	@JSBody(params = { "cb" }, script = "var B=globalThis.__eaglerXR;try{return !!(B&&B.stereoApi&&B.stereoApi.requestFrame(cb));}catch(e){return false;}")
 	public static native boolean requestStereoFrame(FrameCallback cb);
+
+	/**
+	 * User kill switch for all in-tab VR code: {@code ?novr} in the page URL or
+	 * {@code localStorage['eaglerxr.disable'] = '1'}. Lets a crash be bisected on the
+	 * headset without a rebuild.
+	 */
+	@JSBody(script = "try{if(/[?&]novr(?:[=&]|$)/.test(String(globalThis.location&&location.search||'')))return true;"
+		+ "var v=globalThis.localStorage&&localStorage.getItem('eaglerxr.disable');return v==='1'||v==='true';}catch(e){return false;}")
+	public static native boolean isDisabledByUser();
+
+	/** Load-stage breadcrumb for the index.html early diagnostics (no-op without them). */
+	@JSBody(params = { "stage" }, script = "try{if(globalThis.__eaglerXRStage)globalThis.__eaglerXRStage(stage);}catch(e){}")
+	public static native void markStage(String stage);
+
+	/** Shows a VR-side failure on the index.html error overlay (and the console). */
+	@JSBody(params = { "where", "message" }, script = "try{console.error('eaglerxr: '+where+': '+message);"
+		+ "if(globalThis.__eaglerXRReportError)globalThis.__eaglerXRReportError('webxr:'+where,message);}catch(e){}")
+	public static native void reportError(String where, String message);
 }

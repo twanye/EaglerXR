@@ -193,6 +193,46 @@ Right-handed (main = right controller, off = left). `leftHanded` swaps hands.
 - Desktop (not presenting): no change; the GUI pass and HUD are untouched.
 
 
+### Quest load safety and on-headset diagnostics (load-fix stage)
+
+Startup no longer touches WebXR. While the game loads (and on the title screen) the VR
+code does nothing: the JS runtime (`WebXRBridge.installStereo`) is installed the first
+time the player is in a world or opens the pause menu, and it only defines functions.
+The `isSessionSupported('immersive-vr')` query that decides whether to show the floating
+**Enter VR** button runs 4 s after entering a world; `makeXRCompatible`, the
+`XRWebGLLayer`, the stereo atlas / GUI framebuffers and the session itself still wait for
+the Enter VR press. Every bridge call is wrapped: a failure turns VR off for the session
+(reported on screen) instead of crashing the game.
+
+- `?novr` or `localStorage['eaglerxr.disable'] = '1'` turns all in-tab VR code off.
+- Fixed: the VR GUI overlay shaders (PR #3) contained raw newlines inside JS strings, so
+  the `installStereo` JSBody was a JavaScript SyntaxError the first time it ran.
+
+Loader memory (headsets): Quest Browser kills the tab on out-of-memory. On standalone
+headsets (Quest/Pico/Wolvic user agents) and devices reporting `deviceMemory <= 4`, the
+shell compiles the ~103 MB client Wasm first, releases its raw bytes, then the ~43 MB
+server image, then the mesh image, instead of all three at once. Mesh workers default off
+on headsets (`?mesh=1` turns them on); the server worker stays on (the Wasm-GC client has
+no single-thread integrated server). `?seqwasm=0/1` or
+`localStorage['eaglerxr.sequentialWasm']` overrides. A headset opening the `file://`
+download keeps the server worker. The VR companion tab never auto-opens on standalone
+headsets (`?xrcompanion=1` to force) and elsewhere only after the game is ready; the
+legacy `eaglerxr_launcher.js` button installs only with `?xrlauncher=1`.
+
+On-screen diagnostics (first script in `<head>`, before the single-file payloads):
+- Uncaught errors, unhandled rejections, Wasm traps/compile errors, fatal shell/Java crash
+  reports, VR bridge failures and `webglcontextlost` show in a red overlay at the top of the
+  page (message + stack + load stage + JS heap), with Copy / Hide / Clear buttons. The last
+  one is kept in `localStorage['eaglerxr.lastError']`.
+- `localStorage['eaglerxr.loadStage']` is a breadcrumb updated at every major stage
+  (`html-head`, `html-parse-payloads`, `payloads-parsed`, `shell-options ...`,
+  `wasm-compile-*`, `wasm-client-compiled`, `wasm-workers-compiled`, `wasm-instantiated`,
+  `java-main`, `boot-NN-...`, `game-ready`, `in-world`, `xr-*`). An out-of-memory tab kill
+  cannot be caught, so the next load shows a yellow "previous attempt" panel naming the
+  stage the previous load died in and its last stages/heap readings. A normal reload or
+  close is not reported.
+- Opt out with `?noerroroverlay` or `localStorage['eaglerxr.errorOverlay'] = '0'`.
+
 ## Untested / known limitations
 
 Nothing here has been run on a headset (no Quest hardware was available), and
