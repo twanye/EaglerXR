@@ -1540,7 +1540,9 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
    }
 
    private void pauseIfInactive() {
-      if (!this.window.isFocused() && this.options.pauseOnLostFocus) {
+      // EaglerXR: entering an immersive WebXR session can blur the page; don't auto-pause into an
+      // invisible (desktop-only) pause menu while the headset is presenting.
+      if (!this.window.isFocused() && this.options.pauseOnLostFocus && !net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
          if (Util.getMillis() - this.lastActiveTime > 500L) {
             this.pauseGame(false);
          }

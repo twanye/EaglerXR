@@ -136,6 +136,7 @@
 
     function startRemoteSession(msg) {
         var B = bridge();
+        if (B.stereo) return; // an in-tab stereo session (WebXRBridge.installStereo) owns __eaglerXR
         B.active = true;
         B.session = fakeSession;
         B.ref = { type: msg.refType || "local-floor" };
@@ -150,6 +151,7 @@
 
     function endRemoteSession(reason) {
         var B = bridge();
+        if (B.stereo) { state.xrActive = false; closeVideo(); return; } // never tear down the in-tab session
         B.active = false;
         B.session = null;
         B.ref = null;
@@ -256,6 +258,7 @@
                 if (msg.seq <= lastSeq && lastSeq - msg.seq < 1000) return; // duplicate or stale
                 lastSeq = msg.seq;
             }
+            if (bridge().stereo) return; // in-tab stereo session active: ignore companion poses
             if (!state.xrActive) startRemoteSession(msg);
             applyPose(msg);
             break;

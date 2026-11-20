@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -82,6 +84,7 @@ import org.apache.commons.io.IOUtils;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 import org.joml.Matrix4fc;
+import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -131,6 +134,8 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
    private final ProjectionMatrixBuffer hud3dProjectionMatrixBuffer = new ProjectionMatrixBuffer("3d hud");
    private boolean eaglerOptimizedShaderFailed;
    private boolean eaglerOptimizedShaderRequestedLastFrame;
+   /** EaglerXR: true while renderLevel draws one WebXR eye (skips bobbing, hand and screen effects). */
+   private boolean xrEyePass;
 
    public GameRenderer(final Minecraft minecraft, final ItemInHandRenderer itemInHandRenderer, final ModelManager modelManager) {
       this.minecraft = minecraft;
@@ -429,6 +434,8 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
    public void update(final DeltaTracker deltaTracker) {
       ProfilerFiller profiler = Profiler.get();
       profiler.push("camera");
+      // EaglerXR: snapshot this frame's WebXR viewer pose before the camera reads it.
+      PlatformWebXR.pollFrame();
       this.mainCamera.update(deltaTracker);
       profiler.pop();
    }
@@ -466,6 +473,7 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
          );
       boolean resourcesLoaded = this.minecraft.isGameLoadFinished();
       boolean shouldRenderLevel = resourcesLoaded && advanceGameTime && this.minecraft.level != null;
+      PlatformWebXR.setWorldActive(shouldRenderLevel);
       this.globalSettingsUniform
          .update(
             windowRenderState.width,
@@ -480,7 +488,11 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
       if (shouldRenderLevel) {
          this.lightmap.render(this.gameRenderState.lightmapRenderState);
          profiler.push("world");
-         this.renderLevel(deltaTracker);
+         if (PlatformWebXR.isPresenting()) {
+            this.renderLevelStereo(deltaTracker);
+         } else {
+            this.renderLevel(deltaTracker);
+         }
          this.tryTakeScreenshotIfNeeded();
          this.minecraft.levelRenderer.doEntityOutline();
          if (this.postEffectId != null && this.effectActive) {
@@ -623,6 +635,66 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
       return renderOutline;
    }
 
+   /**
+    * EaglerXR: renders the level once per WebXR view. Each eye reuses the
+    * extracted frame, swapping in that view's projection (FOV/asymmetry from
+    * WebXR, depth range from the game's own reversed-Z projection) and a view
+    * matrix built from the head-tracked camera orientation plus the eye's
+    * offset/orientation relative to the head. The finished eye image is copied
+    * into the eye's viewport of the XRWebGLLayer via PlatformWebXR.submitEye.
+    * Desktop rendering never reaches this method (isPresenting() is false).
+    */
+   private void renderLevelStereo(final DeltaTracker deltaTracker) {
+      CameraRenderState cameraState = this.gameRenderState.levelRenderState.cameraRenderState;
+      net.minecraft.client.renderer.state.level.LevelRenderState levelState = this.gameRenderState.levelRenderState;
+      float[] xr = PlatformWebXR.getFrameData();
+      int views = PlatformWebXR.getViewCount();
+      Matrix4f savedProjection = new Matrix4f(cameraState.projectionMatrix);
+      Matrix4f savedViewRotation = new Matrix4f(cameraState.viewRotationMatrix);
+      // LevelRenderer.render consumes (clears) these submission lists; keep a copy so every eye sees them.
+      List<net.minecraft.client.renderer.entity.state.EntityRenderState> entities = new ArrayList<>(levelState.entityRenderStates);
+      List<net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState> blockEntities = new ArrayList<>(levelState.blockEntityRenderStates);
+      List<net.minecraft.client.renderer.state.level.BlockBreakingRenderState> blockBreaking = new ArrayList<>(levelState.blockBreakingRenderStates);
+      // base = camera orientation without the head rotation, so eye = base * eyeOrientation.
+      // In first person the camera already includes the head pose (Camera.applyXRHeadPose);
+      // in other camera modes this degrades to stereo around the unchanged camera.
+      Quaternionf headInverse = new Quaternionf(xr[4], xr[5], xr[6], xr[7]).normalize().conjugate();
+      Quaternionf base = new Quaternionf(cameraState.orientation).mul(headInverse);
+      Quaternionf eyeWorld = new Quaternionf();
+      Quaternionf eyeInverse = new Quaternionf();
+      Vector3f eyeOffset = new Vector3f();
+
+      try {
+         for (int view = 0; view < views; view++) {
+            if (view > 0) {
+               levelState.entityRenderStates.clear();
+               levelState.entityRenderStates.addAll(entities);
+               levelState.blockEntityRenderStates.clear();
+               levelState.blockEntityRenderStates.addAll(blockEntities);
+               levelState.blockBreakingRenderStates.clear();
+               levelState.blockBreakingRenderStates.addAll(blockBreaking);
+            }
+
+            int o = PlatformWebXR.viewOffset(view);
+            base.mul(new Quaternionf(xr[o + 19], xr[o + 20], xr[o + 21], xr[o + 22]).normalize(), eyeWorld);
+            base.transform(xr[o + 16], xr[o + 17], xr[o + 18], eyeOffset);
+            eyeWorld.conjugate(eyeInverse);
+            cameraState.viewRotationMatrix.rotation(eyeInverse).translate(-eyeOffset.x, -eyeOffset.y, -eyeOffset.z);
+            // x/y rows from the WebXR projection (column-major m00, m11, m20, m21);
+            // z rows stay the game's (reversed-Z, device depth range).
+            cameraState.projectionMatrix.set(savedProjection).m00(xr[o]).m11(xr[o + 5]).m20(xr[o + 8]).m21(xr[o + 9]).determineProperties();
+            this.xrEyePass = true;
+            this.renderLevel(deltaTracker);
+            this.xrEyePass = false;
+            PlatformWebXR.submitEye(view, this.mainRenderTarget.getColorTextureView(), this.mainRenderTarget.width, this.mainRenderTarget.height);
+         }
+      } finally {
+         this.xrEyePass = false;
+         cameraState.projectionMatrix.set(savedProjection);
+         cameraState.viewRotationMatrix.set(savedViewRotation);
+      }
+   }
+
    public void renderLevel(final DeltaTracker deltaTracker) {
       float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
       float cameraEntityPartialTicks = this.mainCamera.getCameraEntityPartialTicks(deltaTracker);
@@ -634,18 +706,20 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
       Matrix4fc modelViewMatrix = cameraState.viewRotationMatrix;
       profiler.push("matrices");
       Matrix4f projectionMatrix = new Matrix4f(cameraState.projectionMatrix);
-      PoseStack bobStack = new PoseStack();
-      this.bobHurt(cameraState, bobStack);
-      if (optionsState.bobView) {
-         this.bobView(cameraState, bobStack);
-      }
+      if (!this.xrEyePass) {
+         PoseStack bobStack = new PoseStack();
+         this.bobHurt(cameraState, bobStack);
+         if (optionsState.bobView) {
+            this.bobView(cameraState, bobStack);
+         }
 
-      projectionMatrix.mul(bobStack.last().pose());
+         projectionMatrix.mul(bobStack.last().pose());
+      }
       float screenEffectScale = optionsState.screenEffectScale;
       float portalIntensity = Mth.lerp(worldPartialTicks, player.oPortalEffectIntensity, player.portalEffectIntensity);
       float nauseaIntensity = player.getEffectBlendFactor(MobEffects.NAUSEA, worldPartialTicks);
       float spinningEffectIntensity = Math.max(portalIntensity, nauseaIntensity) * (screenEffectScale * screenEffectScale);
-      if (spinningEffectIntensity > 0.0F) {
+      if (spinningEffectIntensity > 0.0F && !this.xrEyePass) {
          float skew = 5.0F / (spinningEffectIntensity * spinningEffectIntensity + 5.0F) - spinningEffectIntensity * 0.04F;
          skew *= skew;
          Vector3f axis = new Vector3f(0.0F, Mth.SQRT_OF_TWO / 2.0F, Mth.SQRT_OF_TWO / 2.0F);
@@ -674,6 +748,13 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
          profiler.popPush("hand");
       }
       boolean isSleeping = cameraState.entityRenderState.isSleeping;
+      if (this.xrEyePass) {
+         // EaglerXR: the first-person hand and full-screen effects use the desktop
+         // HUD projection, which is not stereo-correct; they are skipped per eye.
+         profiler.pop();
+         RenderSystem.setShaderFog(this.fogRenderer.getBuffer(FogRenderer.FogMode.NONE));
+         return;
+      }
       this.hudProjection
          .setupPerspective(0.05F, 100.0F, cameraState.hudFov, this.gameRenderState.windowRenderState.width, this.gameRenderState.windowRenderState.height);
       RenderSystem.setProjectionMatrix(this.hud3dProjectionMatrixBuffer.getBuffer(this.hudProjection), ProjectionType.PERSPECTIVE);
