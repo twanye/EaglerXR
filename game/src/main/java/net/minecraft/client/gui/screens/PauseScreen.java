@@ -90,6 +90,24 @@ public class PauseScreen extends Screen {
          this.minecraft.gui.setScreen(null);
          this.minecraft.mouseHandler.grabMouse();
       }).width(204).build(), 2, gridLayout.newCellSettings().paddingTop(50));
+      if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isSupported()) {
+         // EaglerXR: in-tab WebXR stereo. The press is still inside the browser's
+         // transient user activation window, which requestSession() requires.
+         boolean presenting = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting();
+         helper.addChild(Button.builder(Component.literal(presenting ? "Exit VR" : "Enter VR"), button -> {
+            if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
+               net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.exitVR();
+            } else if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.requestEnterVR()) {
+               // The GUI is not drawn in the headset yet, so return to the game.
+               this.minecraft.gui.setScreen(null);
+               this.minecraft.mouseHandler.grabMouse();
+            } else {
+               String status = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.getStatusMessage();
+               button.setMessage(Component.literal(status != null ? status : "VR unavailable"));
+               button.active = false;
+            }
+         }).width(204).build(), 2);
+      }
       helper.addChild(this.openScreenButton(ADVANCEMENTS, () -> new AdvancementsScreen(this.minecraft.player.connection.getAdvancements(), this)));
       helper.addChild(this.openScreenButton(STATS, () -> new StatsScreen(this, this.minecraft.player.getStats())));
       Optional<? extends Holder<Dialog>> additions = this.getCustomAdditions();

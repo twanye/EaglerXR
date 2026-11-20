@@ -1425,6 +1425,17 @@ public class PlatformInput {
 				completeRequestAnimationFrame();
 			}
 		});
+		// EaglerXR: while an in-tab immersive session presents, the page's window
+		// rAF can be throttled or paused (Quest Browser), so also wake on the XR
+		// session's animation frame. Whichever fires first completes the wait.
+		if(PlatformWebXR.isPresenting()) {
+			net.lax1dude.eaglercraft.v1_8.internal.teavm.webxr.WebXRBridge.requestStereoFrame(() -> {
+				if(!completed[0]) {
+					completed[0] = true;
+					completeRequestAnimationFrame();
+				}
+			});
+		}
 		vsyncTimeout = Window.setTimeout(() -> {
 			if(!completed[0]) {
 				completed[0] = true;

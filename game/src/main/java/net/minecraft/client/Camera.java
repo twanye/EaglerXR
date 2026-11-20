@@ -98,6 +98,9 @@ public class Camera implements TrackedWaypoint.Camera {
 
          float partialTicks = this.getCameraEntityPartialTicks(deltaTracker);
          this.alignWithEntity(partialTicks);
+         if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting() && this.minecraft.options.getCameraType().isFirstPerson()) {
+            this.applyXRHeadPose();
+         }
          this.fov = this.calculateFov(partialTicks);
          this.hudFov = this.calculateHudFov(partialTicks);
          this.prepareCullFrustum(this.getViewRotationMatrix(this.cachedViewRotMatrix), this.createProjectionMatrixForCulling(), this.position);
@@ -173,12 +176,37 @@ public class Camera implements TrackedWaypoint.Camera {
       this.fovModifier = Mth.clamp(this.fovModifier, 0.1F, 1.5F);
    }
 
+   /**
+    * EaglerXR: the head orientation (WebXR viewer pose, reference-space axes:
+    * -Z forward, +Y up) is applied on top of the entity's body yaw. Mouse/body
+    * pitch is replaced by the head's pitch and roll, so the horizon follows the
+    * headset. Per-eye offsets/orientations are applied later in
+    * GameRenderer.renderLevelStereo relative to this head-tracked rotation.
+    */
+   private void applyXRHeadPose() {
+      float[] xr = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.getFrameData();
+      Quaternionf head = new Quaternionf(xr[4], xr[5], xr[6], xr[7]).normalize();
+      this.rotation.rotationY((float) Math.PI - this.yRot * (float) (Math.PI / 180.0)).mul(head);
+      FORWARDS.rotate(this.rotation, this.forwards);
+      UP.rotate(this.rotation, this.up);
+      LEFT.rotate(this.rotation, this.left);
+      this.xRot = (float) Math.toDegrees(Math.asin(Mth.clamp(-this.forwards.y, -1.0F, 1.0F)));
+      this.yRot = (float) Math.toDegrees(Math.atan2(-this.forwards.x, this.forwards.z));
+      this.matrixPropertiesDirty |= 3;
+   }
+
    private Matrix4f createProjectionMatrixForCulling() {
       float fovForCulling = Math.max(this.fov, this.minecraft.options.fov().get().intValue());
+      float aspectForCulling = (float)this.minecraft.getWindow().getWidth() / this.minecraft.getWindow().getHeight();
+      if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
+         // EaglerXR: cull with a frustum wide enough for both headset eyes (incl. roll).
+         fovForCulling = Math.max(fovForCulling, 120.0F);
+         aspectForCulling = Math.max(aspectForCulling, 1.25F);
+      }
       Matrix4f projection = new Matrix4f();
       return projection.perspective(
          fovForCulling * (float) (Math.PI / 180.0),
-         (float)this.minecraft.getWindow().getWidth() / this.minecraft.getWindow().getHeight(),
+         aspectForCulling,
          0.05F,
          this.depthFar,
          RenderSystem.getDevice().getDeviceInfo().isZZeroToOne()
