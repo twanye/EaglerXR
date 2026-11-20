@@ -351,7 +351,7 @@ public class MouseHandler {
             this.ypos = ypos;
             this.ignoreFirstMove = false;
          } else {
-            if (this.minecraft.isWindowActive()) {
+            if (this.eaglerWindowActive()) {
                this.accumulatedDX = this.accumulatedDX + (xpos - this.xpos);
                this.accumulatedDY = this.accumulatedDY + (ypos - this.ypos);
             }
@@ -366,7 +366,7 @@ public class MouseHandler {
       double time = Blaze3D.getTime();
       double mousea = time - this.lastHandleMovementTime;
       this.lastHandleMovementTime = time;
-      if (this.minecraft.isWindowActive()) {
+      if (this.eaglerWindowActive()) {
          Screen screen = this.minecraft.gui.screen();
          boolean mouseMoved = this.accumulatedDX != 0.0 || this.accumulatedDY != 0.0;
          if (mouseMoved) {
@@ -487,6 +487,29 @@ public class MouseHandler {
       if (pressed != null) {
          this.onButton(handle, new MouseButtonInfo(0, 0), pressed.booleanValue() ? 1 : 0);
       }
+   }
+
+   /**
+    * EaglerXR: the page can lose focus while an immersive WebXR session presents;
+    * the VR cursor must still drive hover/drag on screens then.
+    */
+   private boolean eaglerWindowActive() {
+      return this.minecraft.isWindowActive() || net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting();
+   }
+
+   /** EaglerXR: move the screen cursor to the VR pointer (window pixels, top-left origin). */
+   public void eaglerXRPointer(final double x, final double y) {
+      this.onMove(this.minecraft.getWindow().handle(), x, y);
+   }
+
+   /** EaglerXR: VR controller mouse button (0 left, 1 right) at the current cursor; mods 1 = shift. */
+   public void eaglerXRButton(final int button, final boolean pressed, final int mods) {
+      this.onButton(this.minecraft.getWindow().handle(), new MouseButtonInfo(button, mods), pressed ? 1 : 0);
+   }
+
+   /** EaglerXR: VR thumbstick scroll (+1 up, -1 down) at the current cursor. */
+   public void eaglerXRScroll(final double amount) {
+      this.onScroll(this.minecraft.getWindow().handle(), 0.0, amount);
    }
 
    /** Feed look-pad motion through vanilla sensitivity/smoothing this frame. */

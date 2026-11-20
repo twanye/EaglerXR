@@ -33,5 +33,10 @@ public class KeyboardInput extends ClientInput {
       float forwardImpulse = calculateImpulse(this.keyPresses.forward(), this.keyPresses.backward());
       float leftImpulse = calculateImpulse(this.keyPresses.left(), this.keyPresses.right());
       this.moveVector = new Vec2(leftImpulse, forwardImpulse).normalized();
+      // EaglerXR: analog thumbstick movement while a WebXR session presents (null otherwise).
+      Vec2 xrMove = net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.getAnalogMove();
+      if (xrMove != null) {
+         this.moveVector = xrMove;
+      }
    }
 }

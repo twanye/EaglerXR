@@ -90,6 +90,11 @@ public final class WebXRBridge {
 		B.sd = new Float32Array(62); B.vsync = [];
 		// Controller snapshot, 2 slots x 16 floats (slot 0 = left, 1 = right), see PlatformWebXR.
 		B.cd = new Float32Array(32);
+		// VR GUI panel state. gd = [panel mode, -, hit0, u0, v0, hit1, u1, v1] (v from the top), see PlatformWebXR.
+		B.gd = new Float32Array(8);
+		B.gui = { mode: 0, laser: 0, aim: 1, tex: null, fbo: null, w: 0, h: 0, ready: false, lastMode: 0,
+		  screenPanel: null, hudPanel: null, hudYaw: null, cur: [null, null], lasers: [] };
+		B.views = null;
 		var S = B.stereoApi = {};
 		var CAPS = null;
 		S.supported = function () {
@@ -183,7 +188,176 @@ public final class WebXRBridge {
 		    } else {
 		      g.clearColor(0, 0, 0, 1); g.clear(g.COLOR_BUFFER_BIT);
 		    }
+		    S.drawOverlays(g);
 		  } finally { S.restore(g, st); }
+		};
+		// ---- VR GUI / HUD panel and laser pointers (composited per eye at XR frame rate) ----
+		S.qrot = function (q, x, y, z) {
+		  var qx = q.x, qy = q.y, qz = q.z, qw = q.w;
+		  var tx = 2 * (qy * z - qz * y), ty = 2 * (qz * x - qx * z), tz = 2 * (qx * y - qy * x);
+		  return [x + qw * tx + (qy * tz - qz * ty), y + qw * ty + (qz * tx - qx * tz), z + qw * tz + (qx * ty - qy * tx)];
+		};
+		S.wrap = function (a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+		S.mul = function (a, b) {
+		  var o = new Float32Array(16);
+		  for (var c = 0; c < 4; ++c) for (var r = 0; r < 4; ++r) {
+		    o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+		  }
+		  return o;
+		};
+		// A panel is a w x h metre quad centred at (x,y,z), turned by yaw about +Y; its front (+Z) faces the user.
+		S.place = function (hp, yaw, dist, dy, w, aspect) {
+		  return { x: hp.x - Math.sin(yaw) * dist, y: hp.y + dy, z: hp.z - Math.cos(yaw) * dist, yaw: yaw, w: w, h: w * aspect };
+		};
+		S.model = function (p) {
+		  var cs = Math.cos(p.yaw), sn = Math.sin(p.yaw);
+		  return new Float32Array([cs, 0, -sn, 0, 0, 1, 0, 0, sn, 0, cs, 0, p.x, p.y, p.z, 1]);
+		};
+		S.hit = function (p, o, d) {
+		  var cs = Math.cos(p.yaw), sn = Math.sin(p.yaw);
+		  var den = d[0] * sn + d[2] * cs;
+		  if (den > -1e-4) return null;
+		  var t = ((p.x - o[0]) * sn + (p.z - o[2]) * cs) / den;
+		  if (!(t > 0) || t > 20) return null;
+		  var hx = o[0] + d[0] * t - p.x, hy = o[1] + d[1] * t - p.y, hz = o[2] + d[2] * t - p.z;
+		  var u = (hx * cs - hz * sn) / p.w + 0.5, v = hy / p.h + 0.5;
+		  if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+		  return { u: u, v: v, t: t };
+		};
+		S.updatePanels = function (pose) {
+		  var G = B.gui, gd = B.gd, c = B.cd;
+		  gd.fill(0); G.lasers = []; G.cur = [null, null];
+		  if (!pose) return;
+		  var hp = pose.transform.position, f = S.qrot(pose.transform.orientation, 0, 0, -1);
+		  var yaw = Math.atan2(-f[0], -f[2]);
+		  var aspect = G.w > 0 && G.h > 0 ? G.h / G.w : 0.5625;
+		  if (G.mode === 2 && G.ready) {
+		    // Menus: placed once in front of the head when a screen opens, then fixed in the room.
+		    if (!G.screenPanel || G.lastMode !== 2) G.screenPanel = S.place(hp, yaw, 1.35, -0.08, 1.6, aspect);
+		    G.screenPanel.h = G.screenPanel.w * aspect;
+		  } else { G.screenPanel = null; }
+		  if (G.mode === 1 && G.ready) {
+		    // HUD: lower in view, follows the head's yaw lazily (35 degree dead zone), never its pitch.
+		    if (G.hudYaw === null || G.lastMode !== 1) G.hudYaw = yaw;
+		    var dy = S.wrap(yaw - G.hudYaw), lim = 0.6;
+		    if (dy > lim) G.hudYaw += dy - lim; else if (dy < -lim) G.hudYaw += dy + lim;
+		    G.hudPanel = S.place(hp, G.hudYaw, 1.3, -0.22, 1.5, aspect);
+		  } else { G.hudPanel = null; G.hudYaw = null; }
+		  G.lastMode = G.ready ? G.mode : 0;
+		  gd[0] = G.screenPanel ? 2 : (G.hudPanel ? 1 : 0);
+		  for (var s = 0; s < 2; ++s) {
+		    var o = s * 16;
+		    if (!c[o]) continue;
+		    var org = [c[o + 2], c[o + 3], c[o + 4]];
+		    var d = S.qrot({ x: c[o + 5], y: c[o + 6], z: c[o + 7], w: c[o + 8] }, 0, 0, -1);
+		    var len = 0, alpha = 0;
+		    if (G.screenPanel) {
+		      var h = S.hit(G.screenPanel, org, d);
+		      if (h) { gd[2 + s * 3] = 1; gd[3 + s * 3] = h.u; gd[4 + s * 3] = 1 - h.v; G.cur[s] = h; len = h.t; alpha = 0.85; }
+		      else { len = 0.6; alpha = 0.3; }
+		    } else if (G.mode === 1 && s === G.aim && G.laser !== 0) {
+		      len = Math.abs(G.laser); alpha = G.laser > 0 ? 0.75 : 0.28;
+		    }
+		    if (len > 0) G.lasers.push([org[0], org[1], org[2], org[0] + d[0] * len, org[1] + d[1] * len, org[2] + d[2] * len, alpha]);
+		  }
+		};
+		S.ensureOverlay = function (g) {
+		  if (B.ovPanel) return true;
+		  if (B.ovFailed) return false;
+		  function sh(t, src) { var x = g.createShader(t); g.shaderSource(x, src); g.compileShader(x); return x; }
+		  function prog(vs, fs) {
+		    var p = g.createProgram(); g.attachShader(p, sh(g.VERTEX_SHADER, vs)); g.attachShader(p, sh(g.FRAGMENT_SHADER, fs)); g.linkProgram(p);
+		    if (!g.getProgramParameter(p, g.LINK_STATUS)) { console.error('eaglerxr: overlay program failed: ' + g.getProgramInfoLog(p)); return null; }
+		    return p;
+		  }
+		  var H = '#version 300 es\nprecision highp float;\n';
+		  var pp = prog(H + 'uniform mat4 u_mvp;uniform vec2 u_size;out vec2 v_uv;void main(){int i=gl_VertexID;vec2 p=vec2((i==1||i==4||i==5)?1.0:0.0,(i==2||i==3||i==5)?1.0:0.0);v_uv=p;gl_Position=u_mvp*vec4((p.x-0.5)*u_size.x,(p.y-0.5)*u_size.y,0.0,1.0);}\n',
+		    H + 'uniform sampler2D u_tex;uniform vec2 u_size;uniform float u_back;uniform vec3 u_c0;uniform vec3 u_c1;in vec2 v_uv;out vec4 o;'
+		    + 'vec4 cur(vec4 c,vec3 k){if(k.z<0.5)return c;float d=length((v_uv-k.xy)*u_size);if(d<0.011)return d<0.007?vec4(1.0):vec4(0.0,0.0,0.0,1.0);return c;}'
+		    + 'void main(){vec4 c=texture(u_tex,v_uv);c+=vec4(0.0,0.0,0.0,u_back)*(1.0-c.a);c=cur(c,u_c0);c=cur(c,u_c1);o=c;}\n');
+		  var lp = prog(H + 'uniform mat4 u_vp;uniform vec3 u_a;uniform vec3 u_b;void main(){gl_Position=u_vp*vec4(gl_VertexID==0?u_a:u_b,1.0);}\n',
+		    H + 'uniform vec4 u_col;out vec4 o;void main(){o=u_col;}\n');
+		  if (!pp || !lp) { B.ovFailed = true; return false; }
+		  B.ovPanel = pp; B.ovLine = lp; B.ovVao = g.createVertexArray();
+		  B.ovU = {
+		    mvp: g.getUniformLocation(pp, 'u_mvp'), size: g.getUniformLocation(pp, 'u_size'), tex: g.getUniformLocation(pp, 'u_tex'),
+		    back: g.getUniformLocation(pp, 'u_back'), c0: g.getUniformLocation(pp, 'u_c0'), c1: g.getUniformLocation(pp, 'u_c1'),
+		    vp: g.getUniformLocation(lp, 'u_vp'), a: g.getUniformLocation(lp, 'u_a'), b: g.getUniformLocation(lp, 'u_b'), col: g.getUniformLocation(lp, 'u_col')
+		  };
+		  return true;
+		};
+		S.drawOverlays = function (g) {
+		  var G = B.gui, views = B.views, layer = B.layer;
+		  var panel = G.ready && G.tex ? (G.screenPanel || G.hudPanel) : null;
+		  if (!views || !layer || (!panel && !G.lasers.length)) return;
+		  if (!S.ensureProgram(g) || !S.ensureOverlay(g)) return;
+		  var bl = [g.getParameter(g.BLEND_SRC_RGB), g.getParameter(g.BLEND_DST_RGB), g.getParameter(g.BLEND_SRC_ALPHA), g.getParameter(g.BLEND_DST_ALPHA),
+		    g.getParameter(g.BLEND_EQUATION_RGB), g.getParameter(g.BLEND_EQUATION_ALPHA)];
+		  try {
+		    g.enable(g.BLEND); g.blendEquation(g.FUNC_ADD);
+		    g.blendFuncSeparate(g.ONE, g.ONE_MINUS_SRC_ALPHA, g.ONE, g.ONE_MINUS_SRC_ALPHA);
+		    g.bindVertexArray(B.ovVao);
+		    for (var i = 0; i < views.length && i < 2; ++i) {
+		      var v = views[i], vp = layer.getViewport(v);
+		      if (!vp) continue;
+		      g.viewport(vp.x, vp.y, vp.width, vp.height);
+		      var pv = S.mul(v.projectionMatrix, v.transform.inverse.matrix);
+		      if (panel) {
+		        g.useProgram(B.ovPanel);
+		        g.uniformMatrix4fv(B.ovU.mvp, false, S.mul(pv, S.model(panel)));
+		        g.uniform2f(B.ovU.size, panel.w, panel.h);
+		        g.uniform1f(B.ovU.back, panel === G.screenPanel ? 0.45 : 0.0);
+		        var c0 = G.cur[0], c1 = G.cur[1];
+		        g.uniform3f(B.ovU.c0, c0 ? c0.u : 0, c0 ? c0.v : 0, c0 ? 1 : 0);
+		        g.uniform3f(B.ovU.c1, c1 ? c1.u : 0, c1 ? c1.v : 0, c1 ? 1 : 0);
+		        g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, G.tex); g.bindSampler(0, B.sampler);
+		        g.uniform1i(B.ovU.tex, 0);
+		        g.drawArrays(g.TRIANGLES, 0, 6);
+		      }
+		      if (G.lasers.length) {
+		        g.useProgram(B.ovLine);
+		        g.uniformMatrix4fv(B.ovU.vp, false, pv);
+		        for (var k = 0; k < G.lasers.length; ++k) {
+		          var L = G.lasers[k];
+		          g.uniform3f(B.ovU.a, L[0], L[1], L[2]); g.uniform3f(B.ovU.b, L[3], L[4], L[5]);
+		          g.uniform4f(B.ovU.col, L[6], L[6], L[6], L[6]);
+		          g.drawArrays(g.LINES, 0, 2);
+		        }
+		      }
+		    }
+		  } finally {
+		    g.blendFuncSeparate(bl[0], bl[1], bl[2], bl[3]); g.blendEquationSeparate(bl[4], bl[5]);
+		  }
+		};
+		// Copies the game's GUI image (drawn over a transparent clear, premultiplied alpha) for the panel.
+		S.copyGui = function (tex, w, h, mode, laser, aim) {
+		  var g = B.gl, G = B.gui;
+		  G.mode = mode | 0; G.laser = +laser || 0; G.aim = aim | 0;
+		  if (!B.stereo || !g || !tex || w <= 0 || h <= 0 || !G.mode) { G.ready = false; return; }
+		  var st = S.save(g);
+		  try {
+		    if (!G.tex || G.w !== w || G.h !== h) {
+		      S.freeGui(g);
+		      G.tex = g.createTexture(); g.bindTexture(g.TEXTURE_2D, G.tex);
+		      g.texStorage2D(g.TEXTURE_2D, 1, g.RGBA8, w, h);
+		      G.fbo = g.createFramebuffer(); G.w = w; G.h = h;
+		      B.readFbo = B.readFbo || g.createFramebuffer();
+		    }
+		    S.plain(g);
+		    g.bindFramebuffer(g.READ_FRAMEBUFFER, B.readFbo);
+		    g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, tex, 0);
+		    g.bindFramebuffer(g.DRAW_FRAMEBUFFER, G.fbo);
+		    g.framebufferTexture2D(g.DRAW_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, G.tex, 0);
+		    g.blitFramebuffer(0, 0, w, h, 0, 0, w, h, g.COLOR_BUFFER_BIT, g.NEAREST);
+		    g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, null, 0);
+		    G.ready = true;
+		  } finally { S.restore(g, st); }
+		};
+		S.freeGui = function (g) {
+		  var G = B.gui;
+		  if (G.fbo) g.deleteFramebuffer(G.fbo);
+		  if (G.tex) g.deleteTexture(G.tex);
+		  G.fbo = null; G.tex = null; G.w = 0; G.h = 0; G.ready = false;
 		};
 		// Controllers: target-ray pose (the pointing ray, not the grip) plus trigger /
 		// squeeze / thumbstick / A,B for each tracked-pointer input source, read in
@@ -213,7 +387,7 @@ public final class WebXRBridge {
 		    c[o + 10] = Math.max(bv(1), s.__eSqz ? 1 : 0);
 		    c[o + 11] = (ax.length >= 4 ? ax[2] : (ax.length >= 2 ? ax[0] : 0)) || 0;
 		    c[o + 12] = (ax.length >= 4 ? ax[3] : (ax.length >= 2 ? ax[1] : 0)) || 0;
-		    c[o + 13] = bv(4); c[o + 14] = bv(5);
+		    c[o + 13] = bv(4); c[o + 14] = bv(5); c[o + 15] = bv(3);
 		  }
 		};
 		S.hookInputEvents = function (s) {
@@ -233,8 +407,9 @@ public final class WebXRBridge {
 		  var s = frame.session;
 		  if (!B.stereo || s !== B.session) return;
 		  s.requestAnimationFrame(S.onFrame);
+		  var pose = null;
 		  try {
-		    var pose = frame.getViewerPose(B.ref);
+		    pose = frame.getViewerPose(B.ref);
 		    if (pose && B.layer) {
 		      var d = B.sd, n = Math.min(pose.views.length, 2), hp = pose.transform.position, hq = pose.transform.orientation;
 		      d[1] = hp.x; d[2] = hp.y; d[3] = hp.z; d[4] = hq.x; d[5] = hq.y; d[6] = hq.z; d[7] = hq.w;
@@ -247,8 +422,10 @@ public final class WebXRBridge {
 		      }
 		      d[0] = n;
 		    }
-		  } catch (e) { console.error('eaglerxr: pose capture failed', e); }
+		    B.views = pose && B.layer ? pose.views : null;
+		  } catch (e) { B.views = null; console.error('eaglerxr: pose capture failed', e); }
 		  try { S.captureInputs(frame); } catch (e) { B.cd.fill(0); console.error('eaglerxr: controller capture failed', e); }
+		  try { S.updatePanels(B.views ? pose : null); } catch (e) { B.gd.fill(0); console.error('eaglerxr: panel update failed', e); }
 		  S.flushVsync();
 		  S.present();
 		};
@@ -257,7 +434,8 @@ public final class WebXRBridge {
 		  B.stereo = false; B.pending = false;
 		  if (B.session && B.session.__eaglerStereo) { B.session = null; B.ref = null; B.active = false; }
 		  B.layer = null; B.sd[0] = 0; B.cd.fill(0);
-		  if (B.gl) { try { S.freeAtlas(B.gl); } catch (e) { } }
+		  if (B.gl) { try { S.freeAtlas(B.gl); S.freeGui(B.gl); } catch (e) { } }
+		  B.views = null; B.gd.fill(0); B.gui.mode = 0; B.gui.lastMode = 0; B.gui.screenPanel = null; B.gui.hudPanel = null; B.gui.hudYaw = null; B.gui.lasers = []; B.gui.cur = [null, null];
 		  S.flushVsync();
 		  if (wasStereo) B.msg = reason || 'VR session ended.';
 		  S.updateButton();
@@ -351,6 +529,23 @@ public final class WebXRBridge {
 
 	@JSBody(params = { "view", "tex", "width", "height" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.copyEye(view,tex,width,height);")
 	public static native void copyEye(int view, JSObject tex, int width, int height);
+
+	/** Latest VR GUI panel / pointer data (8 floats, see PlatformWebXR), or null. */
+	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereo&&B.gd?B.gd:null;")
+	public static native Float32Array stereoGuiData();
+
+	@JSBody(params = { "tex", "width", "height", "mode", "laser", "aim" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.copyGui(tex,width,height,mode,laser,aim);")
+	public static native void copyGui(JSObject tex, int width, int height, int mode, float laser, int aim);
+
+	/**
+	 * Numeric VR option: {@code globalThis.eaglerXRConfig[key]} (number or boolean)
+	 * if set, else {@code localStorage['eaglerxr.' + key]}, else {@code def}.
+	 */
+	@JSBody(params = { "key", "def" }, script = "var c=globalThis.eaglerXRConfig;if(c&&typeof c[key]==='number'&&isFinite(c[key]))return c[key];"
+		+ "if(c&&typeof c[key]==='boolean')return c[key]?1:0;"
+		+ "try{var s=globalThis.localStorage&&localStorage.getItem('eaglerxr.'+key);if(s==='true')return 1;if(s==='false')return 0;if(s!==null&&s!==undefined&&s!==''&&isFinite(+s))return +s;}catch(e){}"
+		+ "return def;")
+	public static native double configValue(String key, double def);
 
 	/** Queues {@code cb} for the next XR animation frame; returns false when no stereo session is presenting. */
 	@JSBody(params = { "cb" }, script = "var B=globalThis.__eaglerXR;return !!(B&&B.stereoApi&&B.stereoApi.requestFrame(cb));")

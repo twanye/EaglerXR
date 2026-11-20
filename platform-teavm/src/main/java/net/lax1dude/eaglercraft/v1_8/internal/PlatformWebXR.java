@@ -18,9 +18,11 @@ public final class PlatformWebXR {
 	public static final int FRAME_DATA_LENGTH = 8 + 2 * VIEW_STRIDE;
 	public static final int CONTROLLER_STRIDE = 16;
 	public static final int CONTROLLER_DATA_LENGTH = 2 * CONTROLLER_STRIDE;
+	public static final int GUI_DATA_LENGTH = 8;
 
 	private static final float[] frame = new float[FRAME_DATA_LENGTH];
 	private static final float[] controllers = new float[CONTROLLER_DATA_LENGTH];
+	private static final float[] gui = new float[GUI_DATA_LENGTH];
 	private static boolean installed = false;
 	private static boolean presenting = false;
 	private static int viewCount = 0;
@@ -102,6 +104,14 @@ public final class PlatformWebXR {
 		for (int i = m; i < CONTROLLER_DATA_LENGTH; ++i) {
 			controllers[i] = 0.0F;
 		}
+		Float32Array gd = WebXRBridge.stereoGuiData();
+		int k = gd == null ? 0 : Math.min(gd.getLength(), GUI_DATA_LENGTH);
+		for (int i = 0; i < k; ++i) {
+			gui[i] = gd.get(i);
+		}
+		for (int i = k; i < GUI_DATA_LENGTH; ++i) {
+			gui[i] = 0.0F;
+		}
 		return presenting;
 	}
 
@@ -110,6 +120,9 @@ public final class PlatformWebXR {
 		viewCount = 0;
 		for (int i = 0; i < CONTROLLER_DATA_LENGTH; ++i) {
 			controllers[i] = 0.0F;
+		}
+		for (int i = 0; i < GUI_DATA_LENGTH; ++i) {
+			gui[i] = 0.0F;
 		}
 	}
 
@@ -148,5 +161,28 @@ public final class PlatformWebXR {
 			return;
 		}
 		WebXRBridge.copyEye(view, ((WebGL2TextureView) colorTextureView).texture().glId(), width, height);
+	}
+
+	public static float[] getGuiData() {
+		return gui;
+	}
+
+	public static void submitGui(final Object colorTextureView, final int width, final int height, final int mode, final float laser, final int aimSlot) {
+		if (!installed) {
+			return;
+		}
+		if (!presenting || !(colorTextureView instanceof WebGL2TextureView)) {
+			WebXRBridge.copyGui(null, 0, 0, 0, 0.0F, aimSlot);
+			return;
+		}
+		WebXRBridge.copyGui(((WebGL2TextureView) colorTextureView).texture().glId(), width, height, mode, laser, aimSlot);
+	}
+
+	public static float getConfig(final String key, final float def) {
+		if (!installed) {
+			return def;
+		}
+		double v = WebXRBridge.configValue(key, def);
+		return Double.isNaN(v) || Double.isInfinite(v) ? def : (float) v;
 	}
 }

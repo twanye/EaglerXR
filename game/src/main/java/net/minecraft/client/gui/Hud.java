@@ -219,8 +219,13 @@ public class Hud {
       this.minecraft.gameRenderer.gameRenderState().guiRenderState.isHudHidden = this.isHidden;
       if (!(this.minecraft.gui.screen() instanceof LevelLoadingScreen)) {
          if (!this.isHidden) {
-            this.extractCameraOverlays(graphics, deltaTracker);
-            this.extractCrosshair(graphics, deltaTracker);
+            // EaglerXR: in the headset the HUD is a floating panel; full-screen camera
+            // overlays (vignette, pumpkin, spyglass, portal) and the 2D crosshair would
+            // cover / clutter it, and the controller laser replaces the crosshair.
+            if (!net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
+               this.extractCameraOverlays(graphics, deltaTracker);
+               this.extractCrosshair(graphics, deltaTracker);
+            }
             graphics.nextStratum();
             this.extractHotbarAndDecorations(graphics, deltaTracker);
             this.extractEffects(graphics, deltaTracker);

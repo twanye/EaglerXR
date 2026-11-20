@@ -507,11 +507,28 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
 
       this.fogRenderer.endFrame();
       RenderSystem.getDevice().createCommandEncoder().clearDepthTexture(this.mainRenderTarget.getDepthTexture(), 0.0);
+      // EaglerXR: in the headset the GUI (menus and HUD) is drawn alone over a transparent
+      // clear and handed to the web layer, which shows it on a floating panel per eye.
+      boolean xrGui = PlatformWebXR.isPresenting();
+      if (xrGui) {
+         RenderSystem.getDevice().createCommandEncoder().clearColorTexture(this.mainRenderTarget.getColorTexture(), new org.joml.Vector4f(0.0F, 0.0F, 0.0F, 0.0F));
+      }
       this.lighting().setupFor(Lighting.Entry.ITEMS_3D);
       this.useUiLightmap = true;
       profiler.push("gui");
       this.guiRenderer.render();
       this.guiRenderer.endFrame();
+      if (xrGui) {
+         int xrGuiMode = this.minecraft.gui.screen() != null || !shouldRenderLevel ? 2 : 1;
+         PlatformWebXR.submitGui(
+            this.mainRenderTarget.getColorTextureView(),
+            this.mainRenderTarget.width,
+            this.mainRenderTarget.height,
+            xrGuiMode,
+            xrGuiMode == 1 ? net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.laserLength(this.minecraft) : 0.0F,
+            net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.aimSlot()
+         );
+      }
       profiler.pop();
       this.useUiLightmap = false;
       this.renderBuffers.endFrame();
