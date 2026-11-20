@@ -178,7 +178,8 @@ public class Camera implements TrackedWaypoint.Camera {
 
    /**
     * EaglerXR: the head orientation (WebXR viewer pose, reference-space axes:
-    * -Z forward, +Y up) is applied on top of the entity's body yaw. Mouse/body
+    * -Z forward, +Y up) is applied on top of the reference-space yaw (or the
+    * entity's body yaw when the head-driven look is not active). Mouse/body
     * pitch is replaced by the head's pitch and roll, so the horizon follows the
     * headset. Per-eye offsets/orientations are applied later in
     * GameRenderer.renderLevelStereo relative to this head-tracked rotation.
@@ -186,7 +187,13 @@ public class Camera implements TrackedWaypoint.Camera {
    private void applyXRHeadPose() {
       float[] xr = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.getFrameData();
       Quaternionf head = new Quaternionf(xr[4], xr[5], xr[6], xr[7]).normalize();
-      this.rotation.rotationY((float) Math.PI - this.yRot * (float) (Math.PI / 180.0)).mul(head);
+      // The player's yaw follows the head (XRControllerInput26), so the base is the
+      // reference-space yaw (snap/smooth turn), not the entity yaw, when available.
+      float baseYaw = net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.getWorldYaw(this.entity);
+      if (Float.isNaN(baseYaw)) {
+         baseYaw = this.yRot;
+      }
+      this.rotation.rotationY((float) Math.PI - baseYaw * (float) (Math.PI / 180.0)).mul(head);
       FORWARDS.rotate(this.rotation, this.forwards);
       UP.rotate(this.rotation, this.up);
       LEFT.rotate(this.rotation, this.left);

@@ -32,7 +32,17 @@ package net.lax1dude.eaglercraft.v1_8.internal;
  *   +10     squeeze / grip   (0..1; 1 while a squeeze event is active)
  *   +11,12  thumbstick x, y (xr-standard axes 2,3; +x right, +y down/back)
  *   +13,14  primary / secondary face button (A/X, B/Y), 0..1
- *   +15     reserved
+ *   +15     thumbstick click (xr-standard button 3), 0..1
+ * </pre>
+ *
+ * <p>VR GUI data returned by {@link #getGuiData()} ({@link #GUI_DATA_LENGTH}
+ * floats, computed by the web layer against the floating GUI panel):
+ * <pre>
+ *   [0]      panel shown: 0 none, 1 HUD panel, 2 screen/menu panel
+ *   [1]      reserved
+ *   per slot s (0 left, 1 right) at 2 + 3*s:
+ *     +0     1 if that controller's target ray hits the screen panel
+ *     +1,2   hit position u (0 left .. 1 right), v (0 top .. 1 bottom)
  * </pre>
  */
 public final class PlatformWebXR {
@@ -41,9 +51,11 @@ public final class PlatformWebXR {
 	public static final int FRAME_DATA_LENGTH = 8 + 2 * VIEW_STRIDE;
 	public static final int CONTROLLER_STRIDE = 16;
 	public static final int CONTROLLER_DATA_LENGTH = 2 * CONTROLLER_STRIDE;
+	public static final int GUI_DATA_LENGTH = 8;
 
 	private static final float[] EMPTY_FRAME = new float[FRAME_DATA_LENGTH];
 	private static final float[] EMPTY_CONTROLLERS = new float[CONTROLLER_DATA_LENGTH];
+	private static final float[] EMPTY_GUI = new float[GUI_DATA_LENGTH];
 
 	private PlatformWebXR() {
 	}
@@ -119,5 +131,25 @@ public final class PlatformWebXR {
 	 * typed as Object because :platform does not depend on the blaze3d classes.
 	 */
 	public static void submitEye(final int view, final Object colorTextureView, final int width, final int height) {
+	}
+
+	/** VR GUI panel / pointer snapshot written by {@link #pollFrame()}; see the class comment. Do not modify. */
+	public static float[] getGuiData() {
+		return EMPTY_GUI;
+	}
+
+	/**
+	 * Hands the GUI image (drawn over a transparent clear) to the web layer, which
+	 * shows it on a floating panel in the headset. {@code mode}: 0 hide, 1 in-game
+	 * HUD panel, 2 screen/menu panel. {@code laser}: in-game laser length from the
+	 * aim controller in metres (negative = nothing hit, 0 = no laser).
+	 * {@code aimSlot}: controller slot the in-game laser starts from.
+	 */
+	public static void submitGui(final Object colorTextureView, final int width, final int height, final int mode, final float laser, final int aimSlot) {
+	}
+
+	/** Numeric VR option (web: globalThis.eaglerXRConfig / localStorage "eaglerxr.KEY"); {@code def} on desktop. */
+	public static float getConfig(final String key, final float def) {
+		return def;
 	}
 }

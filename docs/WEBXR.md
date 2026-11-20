@@ -47,7 +47,8 @@ false and the render loop is byte-for-byte the old path.
   - `GameRenderer.update` calls `PlatformWebXR.pollFrame()` so the camera and
     the renderer use one consistent pose.
   - `Camera.update` (first person only) applies the head orientation on top of
-    the player's body yaw before the cull frustum is built; the culling FOV is
+    the XR world yaw (see VR controls below; the body yaw when that is not
+    active) before the cull frustum is built; the culling FOV is
     widened (>= 120 deg vertical, aspect >= 1.25) while presenting.
   - `GameRenderer.renderLevelStereo` renders the level once per XR view into
     the main render target: the view matrix is (head-tracked camera without the
@@ -77,41 +78,120 @@ false and the render loop is byte-for-byte the old path.
   **`targetRaySpace`** pose (the pointing ray, not the grip) is read in the
   session's reference space, together with trigger (`buttons[0]`), squeeze
   (`buttons[1]`), thumbstick (`axes[2..3]`, falling back to `axes[0..1]`) and
-  the A/X, B/Y face buttons (`buttons[4..5]`), into `__eaglerXR.cd`
+  the A/X, B/Y face buttons (`buttons[4..5]`) and the thumbstick click
+  (`buttons[3]`), into `__eaglerXR.cd`
   (2 slots x 16 floats; slot 0 = left, 1 = right). `selectstart/end` and
   `squeezestart/end` events are OR-ed into trigger/squeeze so input sources
   without a gamepad (e.g. pinching tracked hands, if the browser exposes them as
   tracked pointers) can still act. Layout: `PlatformWebXR` class comment.
-- **Aim controller**: the right controller; the left one when it is the only
-  tracked pointer (`PlatformWebXR.getAimController()`).
+- **Aim controller**: the main (right) controller; the other one when it is the
+  only tracked pointer (`XRControllerInput26.aimSlot()`).
 - **Pick ray** (`XRControllerInput26.computeRay`): the controller's ray is mapped
   into the world exactly like the head in `Camera.applyXRHeadPose` (reference
-  space turned by the player's body yaw, XR head position anchored at the
+  space turned by the XR world yaw, XR head position anchored at the
   player's eye position), so ray and view agree. `Minecraft.pick` uses
   `LocalPlayer.eaglerRaycastXR` (same block clip + entity pick as vanilla, but
   along the controller ray) while presenting and the camera entity is the
   player. Reach is still measured from the eye, as the server checks it. The
   block outline (which reads `minecraft.hitResult`) therefore follows the
   controller and serves as the highlight.
-- **Buttons -> key mappings** (`XRControllerInput26.update`, called from the
-  input pump next to the touch controls; edge-triggered like `TouchControls26`,
-  with press/release hysteresis 0.6/0.35):
+- Desktop / not presenting: `aimSlot()` is -1, `computeRay` returns null and
+  `update` does nothing, so the mouse pick and key handling are unchanged.
 
-  | Input | Action |
-  | --- | --- |
-  | aim trigger | attack / mine (hold keeps mining) |
-  | aim squeeze (grip) | use / place (hold repeats like holding right-click) |
-  | aim A | jump |
-  | other controller's thumbstick | walk forward/back/strafe (digital, relative to body yaw) |
-  | aim thumbstick left/right | 30 deg snap turn (only with two controllers) |
+### VR controls (Visor scheme) and VR menus / HUD (this stage)
 
-  With one controller its own stick walks and there is no snap turn.
-  `continueAttack` also accepts the XR controller as an input owner (the mouse
-  is usually not pointer-locked in the headset). All mapped keys are released
-  when a screen opens, the session ends or no controller is tracked.
-- Desktop / not presenting: `getAimController()` is -1, `computeRay` returns
-  null and `update` does nothing, so the mouse pick and key handling are
-  unchanged.
+#### Control scheme
+
+The default bindings follow **Visor** (VisorModStudio/Visor, branch `dev`,
+MPL-2.0), its Oculus/Meta Touch defaults in
+`visor-core/.../client/input/actions/**` (`getDefaultBindings()` per action,
+`OCULUS_TOUCH` entry, right-handed column) and its defaults in
+`visor-api/.../client/settings/VRClientSettings.java` (rotation mode HMD, 45 deg
+snap step, auto-sprint at 0.9). Visor's code is not copied; the scheme is
+reimplemented in `XRControllerInput26`. Where Visor leaves an action unbound,
+or uses a mechanic WebXR/this port can't reproduce, the binding is ours and is
+marked *deviation*.
+
+Right-handed (main = right controller, off = left). `leftHanded` swaps hands.
+
+| Controller input | In game | In a menu / screen | Source |
+| --- | --- | --- | --- |
+| Right trigger | attack / mine (hold keeps mining) | left click (right-hand pointer) | Visor |
+| Right A | use / place (hold repeats) | right click (right-hand pointer) | Visor |
+| Right B | jump | - | Visor |
+| Right stick left/right | snap turn 45 deg (smooth turn optional) | - | Visor |
+| Right stick up/down | - | scroll (right-hand pointer) | Visor |
+| Right stick click | sneak (hold) | shift (held while clicking = shift-click) | Visor |
+| Right grip | next hotbar slot | - | *deviation* (Visor: hold grip for a radial hotbar on the hand) |
+| Left stick | analog walk/strafe, relative to the head; auto-sprint when pushed fully forward (>= 0.9) | scroll (left-hand pointer) | Visor |
+| Left stick click | sprint | - | *deviation* (Visor: sprint unbound, auto-sprint only) |
+| Left Y | pause menu | close screen (Escape) | Visor ("menu") |
+| Left X | open inventory | right click (left-hand pointer) | *deviation* in game (Visor: X = off-hand use, inventory unbound / via its VR pause menu); Visor in menus |
+| Left trigger | drop held item (one) | left click (left-hand pointer) | *deviation* in game (Visor: off-hand attack for two-handed play); Visor in menus |
+| Left grip | previous hotbar slot | - | *deviation* (see right grip) |
+| Either controller ray | aims (block outline + laser) - right hand | moves the cursor on the menu panel | Visor-like |
+
+- **Look direction follows the head** (Visor's default HMD rotation mode): the
+  player's yaw sent to the server is `worldYaw + head yaw` and its pitch is the
+  head pitch, so block-placement facing, bows, eating etc. use where you look,
+  and walking is relative to the head. `worldYaw` is the snap/smooth-turn offset
+  of the XR reference space; the camera (`Camera.applyXRHeadPose`) and the
+  controller ray use it as their base. Rotation applied by anything else
+  (server teleports, mouse, vehicles) is folded into `worldYaw`.
+- Movement is analog (`KeyboardInput` takes `XRControllerInput26.getAnalogMove()`
+  as its move vector; the digital keys are still set for code that reads them,
+  e.g. boats). Visor-style forward scaling: full walk speed at the sprint
+  threshold.
+- After switching between game and menu input, buttons are ignored until all
+  are released (so the trigger that clicks "Back to Game" doesn't also attack).
+- One controller only: its stick walks, no turning, no off-hand actions.
+- **Options** (no in-game VR settings screen yet). Read when a VR session
+  starts from `globalThis.eaglerXRConfig.<key>` (number or boolean), else
+  `localStorage["eaglerxr.<key>"]`:
+
+  | Key | Default | Meaning |
+  | --- | --- | --- |
+  | `smoothTurn` | `0` | 1 = smooth turn instead of snap turn |
+  | `snapTurnDegrees` | `45` | snap angle (Visor default 45) |
+  | `smoothTurnSpeed` | `70` | smooth-turn speed, deg/s at full deflection (~Visor's 0.06 rad/tick) |
+  | `moveRelativeToController` | `0` | 1 = walk relative to the left controller instead of the head (auto-sprint off then) |
+  | `autoSprint` | `1` | sprint when the stick is pushed past the threshold |
+  | `sprintThreshold` | `0.9` | auto-sprint threshold |
+  | `leftHanded` | `0` | 1 = swap hands (main = left) |
+
+  Example: `localStorage.setItem('eaglerxr.smoothTurn', '1')`, then re-enter VR.
+
+#### VR menus and HUD
+
+- While presenting, `GameRenderer.render` clears the main render target to
+  transparent before the GUI pass and draws the GUI alone (screens, HUD,
+  hotbar, chat, titles). `PlatformWebXR.submitGui` blits that image
+  (premultiplied alpha) into a GUI texture in the web layer.
+- The web layer (`WebXRBridge`, `S.updatePanels` / `S.drawOverlays`) draws it on a
+  floating quad **per eye at XR frame rate** with the current view pose, after
+  the world image:
+  - **Screen/menu panel** (any screen open, or no world e.g. title screen):
+    1.6 m wide, 1.35 m in front of the head, slightly below eye level, placed
+    when the screen opens and then fixed in the room (like Visor's game-screen
+    overlay), drawn over a 45% black backdrop.
+  - **HUD panel** (in game, no screen): 1.5 m wide, 1.3 m ahead, 0.22 m below
+    eye level, follows the head's yaw lazily (35 deg dead zone), not its pitch.
+    The 2D crosshair and full-screen camera overlays (vignette, pumpkin,
+    spyglass, portal/nausea, powder snow) are skipped in VR (`Hud`).
+- **Pointer**: every tracked controller's target ray is intersected with the
+  menu panel in the web layer; the hit (u, v) per hand comes back through
+  `PlatformWebXR.getGuiData()`. `XRControllerInput26` drives the normal mouse
+  path (`MouseHandler.eaglerXRPointer/Button/Scroll`), so hover, click, drag,
+  shift-click and scroll work in every vanilla screen. The cursor belongs to
+  the hand that last clicked on the panel (else whichever hand points at it); a
+  white dot marks each hand's hit point.
+- **Lasers**: in menus, a line from each controller to its hit point (short and
+  faint when missing); in game, a line from the aim controller to the targeted
+  block/entity (faint, reach-length when nothing is hit). Lines are 1 px GL
+  lines, drawn without depth (they show through blocks).
+- The desktop canvas mirror shows only the GUI (over black) while presenting.
+- Desktop (not presenting): no change; the GUI pass and HUD are untouched.
+
 
 ## Untested / known limitations
 
@@ -134,27 +214,33 @@ Known gaps:
 - Eye images are rendered at the canvas resolution and scaled to the eye
   viewport (blurry on high-resolution headsets); the main target is not resized.
 - Head **position** (room-scale / leaning) is not applied; only the per-eye
-  offset (IPD) is. Head orientation drives the camera; body yaw still comes
-  from the mouse; mouse pitch is ignored while presenting in first person.
-- Third-person camera: stereo works but head rotation is not applied.
-- No GUI, HUD, hand or crosshair in the headset; menus and the title screen show
-  black in VR (only the world is rendered). Glowing-entity outlines, post
-  effects and debug gizmos only appear in the last eye / mirror.
-- Controller interaction (stage above) is untested on hardware: verify the
-  ray direction/origin against the block outline, trigger/squeeze mapping on
-  Quest Touch controllers, and that hold-to-mine keeps going.
-- The player's server-side look direction (yaw/pitch) still comes from the
-  body yaw / mouse, not the controller. Things that use the look direction
-  rather than the hit result (block placement facing for stairs/furnaces,
-  bows, tridents, snowballs, eating/aiming without a target, spear-style
-  attack-range items) still use the body direction.
-- No laser line or controller model is drawn; the only pointing feedback is the
-  vanilla block outline (nothing highlights a targeted entity). No held item /
-  hand is drawn in the headset.
-- Locomotion is digital (no analog speed), relative to body yaw (not head or
-  controller), with no smooth turn, sneak/sprint, hotbar, inventory, drop or
-  menu bindings. Room-scale movement, VR HUD/menu input, settings persistence
-  and Vivecraft/Visor-style comfort options are still not implemented.
+  offset (IPD) is. Head orientation drives the camera and (since the VR-controls
+  stage) the player's yaw/pitch; mouse pitch is ignored while presenting.
+- Third-person camera: stereo works but head rotation is not applied to the
+  camera (the player's look still follows the head).
+- No first-person hand / held item and no controller model in the headset.
+  Glowing-entity outlines, post effects and debug gizmos only appear in the
+  last eye / mirror.
+- VR controls, menus and HUD (stage above) are untested on hardware. Verify:
+  panel placement/size and text legibility on Quest; that the GUI image has
+  usable alpha (premultiplied) on Quest Browser's WebGL2; that screen blur
+  (in-world menus) looks right over the transparent clear; ray-panel cursor
+  accuracy (u/v orientation); that hover/drag work while the page reports no
+  focus in immersive mode; button indices on Quest Touch (`buttons[3]` stick
+  click, `[4]` A/X, `[5]` B/Y); the snap-turn / head-yaw sign conventions; and
+  that look-follows-head does not fight vehicles (boats clamp the rider yaw).
+- Not done from Visor: radial hotbar on the hand (grip steps slots instead),
+  two-handed / off-hand interaction, physical (roomscale) swinging, climbing,
+  teleport locomotion, VR keyboard (chat/sign/anvil text entry has no input
+  in the headset; the desktop keyboard still works), a VR settings screen
+  (options come from `eaglerXRConfig` / localStorage), seated mode, world
+  scale, haptics.
+- Toggle-sprint / toggle-sneak vanilla options: the VR bindings press and
+  release the key mappings, so with "toggle" set each press flips the state.
+- In-game laser and lasers in menus are 1 px lines without depth testing; the
+  targeted entity is not highlighted.
+- Holding a mouse button through a screen change is released on the switch;
+  drag-splitting stacks across a screen close is not preserved.
 
 ## Browser limitations
 
