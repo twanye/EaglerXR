@@ -70,6 +70,49 @@ false and the render loop is byte-for-byte the old path.
 - The companion link ignores companion poses while an in-tab stereo session
   owns `__eaglerXR`.
 
+### Controller pointing and interaction (this stage)
+
+- **Capture** (`WebXRBridge`, `S.captureInputs`, inside the same XR frame
+  callback as the viewer pose): for every `tracked-pointer` input source the
+  **`targetRaySpace`** pose (the pointing ray, not the grip) is read in the
+  session's reference space, together with trigger (`buttons[0]`), squeeze
+  (`buttons[1]`), thumbstick (`axes[2..3]`, falling back to `axes[0..1]`) and
+  the A/X, B/Y face buttons (`buttons[4..5]`), into `__eaglerXR.cd`
+  (2 slots x 16 floats; slot 0 = left, 1 = right). `selectstart/end` and
+  `squeezestart/end` events are OR-ed into trigger/squeeze so input sources
+  without a gamepad (e.g. pinching tracked hands, if the browser exposes them as
+  tracked pointers) can still act. Layout: `PlatformWebXR` class comment.
+- **Aim controller**: the right controller; the left one when it is the only
+  tracked pointer (`PlatformWebXR.getAimController()`).
+- **Pick ray** (`XRControllerInput26.computeRay`): the controller's ray is mapped
+  into the world exactly like the head in `Camera.applyXRHeadPose` (reference
+  space turned by the player's body yaw, XR head position anchored at the
+  player's eye position), so ray and view agree. `Minecraft.pick` uses
+  `LocalPlayer.eaglerRaycastXR` (same block clip + entity pick as vanilla, but
+  along the controller ray) while presenting and the camera entity is the
+  player. Reach is still measured from the eye, as the server checks it. The
+  block outline (which reads `minecraft.hitResult`) therefore follows the
+  controller and serves as the highlight.
+- **Buttons -> key mappings** (`XRControllerInput26.update`, called from the
+  input pump next to the touch controls; edge-triggered like `TouchControls26`,
+  with press/release hysteresis 0.6/0.35):
+
+  | Input | Action |
+  | --- | --- |
+  | aim trigger | attack / mine (hold keeps mining) |
+  | aim squeeze (grip) | use / place (hold repeats like holding right-click) |
+  | aim A | jump |
+  | other controller's thumbstick | walk forward/back/strafe (digital, relative to body yaw) |
+  | aim thumbstick left/right | 30 deg snap turn (only with two controllers) |
+
+  With one controller its own stick walks and there is no snap turn.
+  `continueAttack` also accepts the XR controller as an input owner (the mouse
+  is usually not pointer-locked in the headset). All mapped keys are released
+  when a screen opens, the session ends or no controller is tracked.
+- Desktop / not presenting: `getAimController()` is -1, `computeRay` returns
+  null and `update` does nothing, so the mouse pick and key handling are
+  unchanged.
+
 ## Untested / known limitations
 
 Nothing here has been run on a headset (no Quest hardware was available), and
@@ -97,10 +140,21 @@ Known gaps:
 - No GUI, HUD, hand or crosshair in the headset; menus and the title screen show
   black in VR (only the world is rendered). Glowing-entity outlines, post
   effects and debug gizmos only appear in the last eye / mirror.
-- Interaction (crosshair pick, mining, placing) still uses the player's mouse
-  aim, not the head or controllers. Controller raycasts, block interaction,
-  room-scale movement, VR HUD/menu input, settings persistence and
-  Vivecraft/Visor-style comfort options are still not implemented.
+- Controller interaction (stage above) is untested on hardware: verify the
+  ray direction/origin against the block outline, trigger/squeeze mapping on
+  Quest Touch controllers, and that hold-to-mine keeps going.
+- The player's server-side look direction (yaw/pitch) still comes from the
+  body yaw / mouse, not the controller. Things that use the look direction
+  rather than the hit result (block placement facing for stairs/furnaces,
+  bows, tridents, snowballs, eating/aiming without a target, spear-style
+  attack-range items) still use the body direction.
+- No laser line or controller model is drawn; the only pointing feedback is the
+  vanilla block outline (nothing highlights a targeted entity). No held item /
+  hand is drawn in the headset.
+- Locomotion is digital (no analog speed), relative to body yaw (not head or
+  controller), with no smooth turn, sneak/sprint, hotbar, inventory, drop or
+  menu bindings. Room-scale movement, VR HUD/menu input, settings persistence
+  and Vivecraft/Visor-style comfort options are still not implemented.
 
 ## Browser limitations
 

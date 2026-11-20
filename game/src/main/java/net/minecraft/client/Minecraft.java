@@ -879,6 +879,8 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
                      this.keyboardHandler.eaglerPumpEvents();
 					 this.mouseHandler.eaglerHandleUnexpectedPointerLockLoss();
 					 net.lax1dude.eaglercraft.v1_8.touch_gui.TouchControls26.update(this);
+                     // EaglerXR: WebXR controller buttons -> attack/use/jump/move key mappings (no-op unless presenting)
+                     net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.update(this);
                      // Eagler SP control plane pump
                      net.lax1dude.eaglercraft.v1_8.sp.SingleplayerServerController26.runTick();
                      String eaglerCrash = net.lax1dude.eaglercraft.v1_8.sp.SingleplayerServerController26.getAndClearCrashReport();
@@ -2240,7 +2242,8 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
 
       this.continueAttack(this.gui.screen() == null && !instantAttack && this.options.keyAttack.isDown()
          && (this.mouseHandler.isMouseGrabbed()
-            || net.lax1dude.eaglercraft.v1_8.touch_gui.TouchControls26.isEnabled()));
+            || net.lax1dude.eaglercraft.v1_8.touch_gui.TouchControls26.isEnabled()
+            || net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.isDrivingInput()));
    }
 
    private Optional<Holder<Dialog>> getQuickActionsDialog() {
@@ -3433,7 +3436,11 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
       if (cameraEntity != null) {
          if (this.level != null && this.player != null) {
             Profiler.get().push("pick");
-            this.hitResult = this.player.raycastHitResult(partialTicks, cameraEntity);
+            // EaglerXR: while presenting in WebXR, the aim controller's target ray drives the pick.
+            net.minecraft.world.phys.Vec3[] xrRay = cameraEntity == this.player ? net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.computeRay(cameraEntity, partialTicks) : null;
+            this.hitResult = xrRay != null
+               ? this.player.eaglerRaycastXR(cameraEntity, xrRay[0], xrRay[1], partialTicks)
+               : this.player.raycastHitResult(partialTicks, cameraEntity);
             this.crosshairPickEntity = this.hitResult instanceof EntityHitResult entityHitResult ? entityHitResult.getEntity() : null;
             Profiler.get().pop();
          }

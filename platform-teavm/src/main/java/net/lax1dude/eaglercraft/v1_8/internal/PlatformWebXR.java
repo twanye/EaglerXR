@@ -16,8 +16,11 @@ public final class PlatformWebXR {
 
 	public static final int VIEW_STRIDE = 27;
 	public static final int FRAME_DATA_LENGTH = 8 + 2 * VIEW_STRIDE;
+	public static final int CONTROLLER_STRIDE = 16;
+	public static final int CONTROLLER_DATA_LENGTH = 2 * CONTROLLER_STRIDE;
 
 	private static final float[] frame = new float[FRAME_DATA_LENGTH];
+	private static final float[] controllers = new float[CONTROLLER_DATA_LENGTH];
 	private static boolean installed = false;
 	private static boolean presenting = false;
 	private static int viewCount = 0;
@@ -77,14 +80,12 @@ public final class PlatformWebXR {
 
 	public static boolean pollFrame() {
 		if (!installed || !WebXRBridge.isStereoPresenting()) {
-			presenting = false;
-			viewCount = 0;
+			clearFrame();
 			return false;
 		}
 		Float32Array data = WebXRBridge.stereoFrameData();
 		if (data == null) {
-			presenting = false;
-			viewCount = 0;
+			clearFrame();
 			return false;
 		}
 		int n = Math.min(data.getLength(), FRAME_DATA_LENGTH);
@@ -93,7 +94,41 @@ public final class PlatformWebXR {
 		}
 		viewCount = Math.max(0, Math.min(2, (int) frame[0]));
 		presenting = viewCount > 0;
+		Float32Array cd = WebXRBridge.stereoControllerData();
+		int m = cd == null ? 0 : Math.min(cd.getLength(), CONTROLLER_DATA_LENGTH);
+		for (int i = 0; i < m; ++i) {
+			controllers[i] = cd.get(i);
+		}
+		for (int i = m; i < CONTROLLER_DATA_LENGTH; ++i) {
+			controllers[i] = 0.0F;
+		}
 		return presenting;
+	}
+
+	private static void clearFrame() {
+		presenting = false;
+		viewCount = 0;
+		for (int i = 0; i < CONTROLLER_DATA_LENGTH; ++i) {
+			controllers[i] = 0.0F;
+		}
+	}
+
+	public static float[] getControllerData() {
+		return controllers;
+	}
+
+	public static int controllerOffset(final int slot) {
+		return slot * CONTROLLER_STRIDE;
+	}
+
+	public static int getAimController() {
+		if (!presenting) {
+			return -1;
+		}
+		if (controllers[CONTROLLER_STRIDE] != 0.0F) {
+			return 1;
+		}
+		return controllers[0] != 0.0F ? 0 : -1;
 	}
 
 	public static int getViewCount() {

@@ -1271,6 +1271,35 @@ public class LocalPlayer extends AbstractClientPlayer {
       return hitResult;
    }
 
+   /**
+    * EaglerXR: same block/entity pick as {@link #pick}, but along an arbitrary ray
+    * (the WebXR aim controller's target ray). Reach is still measured from the
+    * eye, as the server validates it, so a controller held forward does not
+    * extend reach.
+    */
+   public HitResult eaglerRaycastXR(final Entity cameraEntity, final Vec3 from, final Vec3 direction, final float partialTicks) {
+      double blockInteractionRange = this.blockInteractionRange();
+      double entityInteractionRange = this.entityInteractionRange();
+      Vec3 eye = cameraEntity.getEyePosition(partialTicks);
+      double maxDistance = Math.max(blockInteractionRange, entityInteractionRange) + from.distanceTo(eye);
+      Vec3 to = from.add(direction.x * maxDistance, direction.y * maxDistance, direction.z * maxDistance);
+      HitResult blockHitResult = cameraEntity.level()
+         .clip(new net.minecraft.world.level.ClipContext(from, to, net.minecraft.world.level.ClipContext.Block.OUTLINE, net.minecraft.world.level.ClipContext.Fluid.NONE, cameraEntity));
+      double blockDistanceSq = blockHitResult.getLocation().distanceToSqr(from);
+      double maxDistanceSq = Mth.square(maxDistance);
+      if (blockHitResult.getType() != HitResult.Type.MISS) {
+         maxDistanceSq = blockDistanceSq;
+         maxDistance = Math.sqrt(maxDistanceSq);
+         to = from.add(direction.x * maxDistance, direction.y * maxDistance, direction.z * maxDistance);
+      }
+
+      AABB box = new AABB(from, to).inflate(1.0, 1.0, 1.0);
+      EntityHitResult entityHitResult = ProjectileUtil.getEntityHitResult(cameraEntity, from, to, box, EntitySelector.CAN_BE_PICKED, maxDistanceSq);
+      return entityHitResult != null && entityHitResult.getLocation().distanceToSqr(from) < blockDistanceSq
+         ? filterHitResult(entityHitResult, eye, entityInteractionRange)
+         : filterHitResult(blockHitResult, eye, blockInteractionRange);
+   }
+
    private static HitResult pick(final Entity cameraEntity, final double blockInteractionRange, final double entityInteractionRange, final float partialTicks) {
       double maxDistance = Math.max(blockInteractionRange, entityInteractionRange);
       double maxDistanceSq = Mth.square(maxDistance);

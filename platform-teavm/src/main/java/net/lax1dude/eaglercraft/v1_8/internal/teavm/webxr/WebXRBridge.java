@@ -88,6 +88,8 @@ public final class WebXRBridge {
 		B.gl = gl || null;
 		B.stereo = false; B.pending = false; B.layer = null; B.msg = null; B.world = false; B.xrOk = false;
 		B.sd = new Float32Array(62); B.vsync = [];
+		// Controller snapshot, 2 slots x 16 floats (slot 0 = left, 1 = right), see PlatformWebXR.
+		B.cd = new Float32Array(32);
 		var S = B.stereoApi = {};
 		var CAPS = null;
 		S.supported = function () {
@@ -183,6 +185,46 @@ public final class WebXRBridge {
 		    }
 		  } finally { S.restore(g, st); }
 		};
+		// Controllers: target-ray pose (the pointing ray, not the grip) plus trigger /
+		// squeeze / thumbstick / A,B for each tracked-pointer input source, read in
+		// the same XR frame as the viewer pose. select/squeeze events are OR-ed in so
+		// sources without a gamepad (e.g. tracked hands pinching) can still act.
+		S.captureInputs = function (frame) {
+		  var c = B.cd; c.fill(0);
+		  var b = null;
+		  function bv(k) { var x = b[k]; return x ? Math.max(x.value || 0, x.pressed ? 1 : 0) : 0; }
+		  var list = frame.session.inputSources;
+		  if (!list) return;
+		  for (var i = 0; i < list.length; ++i) {
+		    var s = list[i];
+		    if (!s || s.targetRayMode !== 'tracked-pointer' || !s.targetRaySpace) continue;
+		    var slot = s.handedness === 'left' ? 0 : (s.handedness === 'right' ? 1 : (c[16] ? 0 : 1));
+		    var o = slot * 16;
+		    if (c[o]) continue;
+		    var rp = frame.getPose(s.targetRaySpace, B.ref);
+		    if (!rp) continue;
+		    var p = rp.transform.position, q = rp.transform.orientation;
+		    var gp = s.gamepad, ax = (gp && gp.axes) || [];
+		    b = (gp && gp.buttons) || [];
+		    c[o] = 1; c[o + 1] = s.handedness === 'left' ? 0 : (s.handedness === 'right' ? 1 : 2);
+		    c[o + 2] = p.x; c[o + 3] = p.y; c[o + 4] = p.z;
+		    c[o + 5] = q.x; c[o + 6] = q.y; c[o + 7] = q.z; c[o + 8] = q.w;
+		    c[o + 9] = Math.max(bv(0), s.__eSel ? 1 : 0);
+		    c[o + 10] = Math.max(bv(1), s.__eSqz ? 1 : 0);
+		    c[o + 11] = (ax.length >= 4 ? ax[2] : (ax.length >= 2 ? ax[0] : 0)) || 0;
+		    c[o + 12] = (ax.length >= 4 ? ax[3] : (ax.length >= 2 ? ax[1] : 0)) || 0;
+		    c[o + 13] = bv(4); c[o + 14] = bv(5);
+		  }
+		};
+		S.hookInputEvents = function (s) {
+		  function on(type, key, val) { s.addEventListener(type, function (e) { if (e && e.inputSource) e.inputSource[key] = val; }); }
+		  on('selectstart', '__eSel', true); on('selectend', '__eSel', false);
+		  on('squeezestart', '__eSqz', true); on('squeezeend', '__eSqz', false);
+		  s.addEventListener('inputsourceschange', function (e) {
+		    var r = (e && e.removed) || [];
+		    for (var i = 0; i < r.length; ++i) { r[i].__eSel = false; r[i].__eSqz = false; }
+		  });
+		};
 		S.flushVsync = function () {
 		  var w = B.vsync; B.vsync = [];
 		  for (var i = 0; i < w.length; ++i) { try { w[i](); } catch (e) { console.error(e); } }
@@ -206,6 +248,7 @@ public final class WebXRBridge {
 		      d[0] = n;
 		    }
 		  } catch (e) { console.error('eaglerxr: pose capture failed', e); }
+		  try { S.captureInputs(frame); } catch (e) { B.cd.fill(0); console.error('eaglerxr: controller capture failed', e); }
 		  S.flushVsync();
 		  S.present();
 		};
@@ -213,7 +256,7 @@ public final class WebXRBridge {
 		  var wasStereo = B.stereo || B.pending;
 		  B.stereo = false; B.pending = false;
 		  if (B.session && B.session.__eaglerStereo) { B.session = null; B.ref = null; B.active = false; }
-		  B.layer = null; B.sd[0] = 0;
+		  B.layer = null; B.sd[0] = 0; B.cd.fill(0);
 		  if (B.gl) { try { S.freeAtlas(B.gl); } catch (e) { } }
 		  S.flushVsync();
 		  if (wasStereo) B.msg = reason || 'VR session ended.';
@@ -229,6 +272,7 @@ public final class WebXRBridge {
 		  catch (e) { B.pending = false; B.msg = 'Could not start VR: ' + (e && e.message || e); S.updateButton(); return false; }
 		  req.then(function (s) {
 		    sess = s; s.__eaglerStereo = true;
+		    S.hookInputEvents(s);
 		    s.addEventListener('end', function () { ended = true; if (B.session === s || B.pending) S.cleanup('VR session ended.'); });
 		    return g.makeXRCompatible ? g.makeXRCompatible() : null;
 		  }).then(function () {
@@ -296,6 +340,10 @@ public final class WebXRBridge {
 
 	@JSBody(params = { "on" }, script = "var B=globalThis.__eaglerXR;if(B&&B.stereoApi)B.stereoApi.setWorld(on);")
 	public static native void setStereoWorldActive(boolean on);
+
+	/** Latest controller snapshot (2 slots x 16 floats, see PlatformWebXR), or null. */
+	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereo&&B.cd?B.cd:null;")
+	public static native Float32Array stereoControllerData();
 
 	/** Latest per-frame stereo data (see PlatformWebXR for the layout), or null. */
 	@JSBody(script = "var B=globalThis.__eaglerXR;return B&&B.stereo&&B.sd?B.sd:null;")
