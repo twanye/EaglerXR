@@ -18,13 +18,33 @@ package net.lax1dude.eaglercraft.v1_8.internal;
  *     +19..22 eye orientation quaternion x,y,z,w (reference space)
  *     +23..26 viewport x,y,w,h in XRWebGLLayer framebuffer pixels
  * </pre>
+ *
+ * <p>Controller data returned by {@link #getControllerData()} (same frame as
+ * the viewer pose; slot 0 = left hand, slot 1 = right hand, or the first
+ * free slot for a source without handedness), {@link #CONTROLLER_STRIDE}
+ * floats per slot starting at {@link #controllerOffset(int)}:
+ * <pre>
+ *   +0      1 if this slot holds a tracked-pointer input source this frame, else 0
+ *   +1      handedness: 0 left, 1 right, 2 none
+ *   +2..4   target-ray origin in the XR reference space, metres
+ *   +5..8   target-ray orientation quaternion x,y,z,w (the ray points along local -Z)
+ *   +9      trigger / select (0..1; 1 while a select event is active)
+ *   +10     squeeze / grip   (0..1; 1 while a squeeze event is active)
+ *   +11,12  thumbstick x, y (xr-standard axes 2,3; +x right, +y down/back)
+ *   +13,14  primary / secondary face button (A/X, B/Y), 0..1
+ *   +15     reserved
+ * </pre>
+ */
  */
 public final class PlatformWebXR {
 
 	public static final int VIEW_STRIDE = 27;
 	public static final int FRAME_DATA_LENGTH = 8 + 2 * VIEW_STRIDE;
+	public static final int CONTROLLER_STRIDE = 16;
+	public static final int CONTROLLER_DATA_LENGTH = 2 * CONTROLLER_STRIDE;
 
 	private static final float[] EMPTY_FRAME = new float[FRAME_DATA_LENGTH];
+	private static final float[] EMPTY_CONTROLLERS = new float[CONTROLLER_DATA_LENGTH];
 
 	private PlatformWebXR() {
 	}
@@ -64,6 +84,20 @@ public final class PlatformWebXR {
 	/** Snapshots the latest XR viewer pose for this game frame. Returns true when presenting with views. */
 	public static boolean pollFrame() {
 		return false;
+	}
+
+	/** Controller snapshot written by {@link #pollFrame()}; see the class comment. Do not modify. */
+	public static float[] getControllerData() {
+		return EMPTY_CONTROLLERS;
+	}
+
+	public static int controllerOffset(final int slot) {
+		return slot * CONTROLLER_STRIDE;
+	}
+
+	/** Slot of the controller that aims: right when present, else left; -1 when none / not presenting. */
+	public static int getAimController() {
+		return -1;
 	}
 
 	/** Number of views captured by the last {@link #pollFrame()}. */
