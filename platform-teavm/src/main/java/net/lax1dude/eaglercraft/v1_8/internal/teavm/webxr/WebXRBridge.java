@@ -465,7 +465,8 @@ public final class WebXRBridge {
 		    if (ended) throw new Error('session ended during setup');
 		    S.stage('xr-create-layer');
 		    var layer = new XRWebGLLayer(sess, g, { antialias: false, depth: false, stencil: false, alpha: false });
-		    return sess.updateRenderState({ baseLayer: layer }).then(function () { return layer; });
+		    sess.updateRenderState({ baseLayer: layer }); /* returns undefined per WebXR spec, not a Promise */
+		    return layer;
 		  }).then(function (layer) {
 		    B.layer = layer;
 		    return sess.requestReferenceSpace('local-floor').catch(function () { return sess.requestReferenceSpace('local'); });
