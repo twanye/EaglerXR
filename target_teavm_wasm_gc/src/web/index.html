@@ -759,16 +759,16 @@
 					stage("wasm-client-compiled");
 					// Worker images are optional. Low-memory file:// launches intentionally
 					// leave them null so Firefox never compiles multiple large modules at once.
+					let workerModules = sequential ? null : await Promise.all([meshModulePromise, serverModulePromise]);
+					// The single-file build releases the inline Wasm bytes right after this line,
+					// so in sequential mode the client's raw image is freed before the workers compile.
 					window.__eaglerWasmModule = module;
-					let workerModules;
 					if (sequential) {
 						stage("wasm-compile-server-worker");
 						const serverModule = await compileServerModule();
 						stage("wasm-compile-mesh-worker");
 						const meshModule = await compileMeshModule();
 						workerModules = [meshModule, serverModule];
-					} else {
-						workerModules = await Promise.all([meshModulePromise, serverModulePromise]);
 					}
 					stage("wasm-workers-compiled");
 					window.__eaglerMeshWasmModule = workerModules[0];
