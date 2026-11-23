@@ -39,5 +39,10 @@
         }).catch(function (error) { button.title = error.message; });
     }
     global.EaglerXRLauncher = { install: install, loadRuntime: loadRuntime };
-    global.addEventListener("load", install, { once: true });
+    // EaglerXR: the in-game "Enter VR" button (WebXRBridge stereo path) replaces this legacy
+    // launcher. Its button sat on top of that one and its runtime queried WebXR at page load,
+    // so it now installs only on request: ?xrlauncher=1.
+    if (/[?&]xrlauncher=1(?:&|$)/.test((global.location && global.location.search) || "")) {
+        global.addEventListener("load", install, { once: true });
+    }
 }(typeof window !== "undefined" ? window : this));

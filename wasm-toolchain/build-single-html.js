@@ -705,7 +705,16 @@ ${decoderJs}
 })();
 </script>`;
 
-html = html.replace("<head>", `<head>\n${prelude}`);
+// EaglerXR: index.html carries an early-diagnostics script (error overlay + load-stage
+// breadcrumbs) that must run before the ~64 MB of payloads are parsed and decoded, so
+// the payloads go at its marker; older templates fall back to the top of <head>.
+const payloadMarker = "<!-- EAGLERXR_SINGLE_FILE_PAYLOADS -->";
+const stagedPrelude = `<script type="text/javascript">try{window.__eaglerXRStage&&window.__eaglerXRStage("html-parse-payloads");}catch(e){}</script>\n${prelude}\n<script type="text/javascript">try{window.__eaglerXRStage&&window.__eaglerXRStage("payloads-parsed");}catch(e){}</script>`;
+if (html.includes(payloadMarker)) {
+  html = html.replace(payloadMarker, () => stagedPrelude);
+} else {
+  html = html.replace("<head>", () => `<head>\n${stagedPrelude}`);
+}
 html = html.replace(
   "\t\t(async () => {\n\t\t\ttry {",
   "\t\t(async () => {\n\t\t\ttry {\n\t\t\t\twindow.__eagPrepareInlineAssets();"

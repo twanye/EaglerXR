@@ -2,6 +2,212 @@
 <html style="width:100%;height:100%;background-color:black;">
 <head>
 	<meta charset="UTF-8" />
+	<!-- EaglerXR early diagnostics: must stay the first script in <head> (before the
+	     single-file payloads) so it sees errors and out-of-memory kills during loading.
+	     Opt out with ?noerroroverlay or localStorage['eaglerxr.errorOverlay'] = '0'. -->
+	<script type="text/javascript">
+	(function () {
+		"use strict";
+		var STAGE_KEY = "eaglerxr.loadStage";
+		var ERROR_KEY = "eaglerxr.lastError";
+		var search = "";
+		try { search = String(location.search || ""); } catch (e) {}
+		function lsGet(k) { try { return window.localStorage ? localStorage.getItem(k) : null; } catch (e) { return null; } }
+		function lsSet(k, v) { try { if (window.localStorage) localStorage.setItem(k, v); } catch (e) {} }
+		function lsDel(k) { try { if (window.localStorage) localStorage.removeItem(k); } catch (e) {} }
+		var enabled = search.indexOf("noerroroverlay") < 0 && lsGet("eaglerxr.errorOverlay") !== "0";
+		var session = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+		var t0 = Date.now();
+		function heap() {
+			try {
+				var m = performance && performance.memory;
+				if (m) return Math.round(m.usedJSHeapSize / 1048576) + "/" + Math.round(m.jsHeapSizeLimit / 1048576) + " MB";
+			} catch (e) {}
+			return "n/a";
+		}
+
+		// ---- previous attempt: where did it stop? -------------------------------------
+		var previousStage = null;
+		try { previousStage = JSON.parse(lsGet(STAGE_KEY) || "null"); } catch (e) { previousStage = null; }
+		// "unloaded" = the page was closed or reloaded normally; "running" = got in game.
+		// "running" counts too when the last stage was VR (the tab died inside a VR session).
+		var previousDied = !!(previousStage && previousStage.stage && previousStage.state !== "unloaded"
+			&& (previousStage.state !== "running" || /^xr-/.test(previousStage.stage))
+			&& Date.now() - (previousStage.at || 0) < 3 * 86400000);
+		var previousError = null;
+		try { previousError = JSON.parse(lsGet(ERROR_KEY) || "null"); } catch (e) { previousError = null; }
+
+		var current = {
+			session: session, stage: "html-head", state: "loading", at: Date.now(), startedAt: t0, ms: 0,
+			heap: heap(), ua: navigator.userAgent || "", deviceMemory: navigator.deviceMemory || 0,
+			cores: navigator.hardwareConcurrency || 0, url: String(location.href).slice(0, 200), history: ["0ms html-head"]
+		};
+		function saveStage() { lsSet(STAGE_KEY, JSON.stringify(current)); }
+		// Called at every major load stage (shell, wasm decode/compile, Java boot, game ready, VR).
+		window.__eaglerXRStage = function (name, state) {
+			try {
+				current.stage = String(name || current.stage).slice(0, 160);
+				if (state) current.state = state;
+				current.at = Date.now(); current.ms = current.at - t0; current.heap = heap();
+				current.history.push(current.ms + "ms " + current.stage + " [" + current.heap + "]");
+				if (current.history.length > 40) current.history.splice(0, current.history.length - 40);
+				saveStage();
+			} catch (e) {}
+		};
+		saveStage();
+		function markUnloaded() {
+			if (current.state === "loading" || current.state === "running") {
+				current.state = "unloaded"; current.at = Date.now(); saveStage();
+			}
+		}
+		window.addEventListener("pagehide", markUnloaded);
+		window.addEventListener("beforeunload", markUnloaded);
+
+		// ---- on-screen overlay ---------------------------------------------------------
+		var errors = [];
+		var box = null, list = null;
+		function el(tag, css, text) {
+			var e = document.createElement(tag);
+			if (css) e.style.cssText = css;
+			if (text != null) e.textContent = text;
+			return e;
+		}
+		function btn(label, fn) {
+			var b = el("button", "margin:6px 8px 0 0;padding:8px 14px;font:600 15px sans-serif;border:1px solid #888;border-radius:4px;background:#333;color:#fff;cursor:pointer", label);
+			b.type = "button";
+			b.addEventListener("click", function (ev) { ev.stopPropagation(); fn(b); });
+			b.addEventListener("mousedown", function (ev) { ev.stopPropagation(); });
+			return b;
+		}
+		// One fixed column at the top of the page holds the error box and the
+		// previous-attempt panel, so neither covers the other (or the game's own crash bar).
+		var hostEl = null;
+		function host() {
+			if (hostEl) return hostEl;
+			if (!document.body) return null;
+			hostEl = el("div", "position:fixed;left:8px;right:8px;top:8px;max-height:85vh;overflow:auto;z-index:2147483647;"
+				+ "display:flex;flex-direction:column;gap:8px;pointer-events:none");
+			hostEl.id = "eaglerxr-diagnostics";
+			document.body.appendChild(hostEl);
+			return hostEl;
+		}
+		function ensureBox() {
+			if (box) return box;
+			if (!host()) return null;
+			box = el("div", "pointer-events:auto;max-height:60vh;overflow:auto;"
+				+ "background:rgba(20,0,0,.94);color:#fff;border:2px solid #f55;border-radius:6px;padding:12px 14px;"
+				+ "font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;box-sizing:border-box");
+			box.id = "eaglerxr-error-overlay";
+			var title = el("div", "font:700 17px sans-serif;margin-bottom:6px;color:#ff8a8a", "EaglerXR caught an error");
+			list = el("div", "");
+			var bar = el("div", "margin-top:8px");
+			bar.appendChild(btn("Copy", function (b) {
+				var text = errors.map(function (x) { return x.text; }).join("\n\n----\n\n");
+				try { navigator.clipboard.writeText(text).then(function () { b.textContent = "Copied"; }, function () { b.textContent = "Copy failed"; }); }
+				catch (e) { b.textContent = "Copy failed"; }
+			}));
+			bar.appendChild(btn("Hide", function () { box.style.display = "none"; }));
+			bar.appendChild(btn("Clear saved error", function () { lsDel(ERROR_KEY); box.style.display = "none"; }));
+			box.appendChild(title); box.appendChild(list); box.appendChild(bar);
+			hostEl.insertBefore ? hostEl.insertBefore(box, hostEl.firstChild || null) : hostEl.appendChild(box);
+			return box;
+		}
+		function render() {
+			if (!enabled || !ensureBox()) return;
+			list.textContent = "";
+			for (var i = Math.max(0, errors.length - 5); i < errors.length; ++i) {
+				list.appendChild(el("div", "margin:4px 0 8px;border-bottom:1px solid #733;padding-bottom:6px", errors[i].text));
+			}
+			box.style.display = "block";
+		}
+		function describe(kind, err, extra) {
+			var msg = "";
+			try {
+				if (err && (err.stack || err.message)) {
+					msg = (err.name ? err.name + ": " : "") + (err.message || "");
+					if (err.stack && String(err.stack).indexOf(err.message || "\u0000") < 0) msg += "\n" + err.stack;
+					else if (err.stack) msg = String(err.stack);
+				} else {
+					msg = String(err);
+				}
+			} catch (e) { msg = "(unprintable error)"; }
+			if (msg.length > 6000) msg = msg.slice(0, 6000) + "\n...[truncated]";
+			return "[" + kind + "] at load stage '" + current.stage + "' (+" + Math.round((Date.now() - t0) / 1000) + "s, heap " + heap() + ")"
+				+ (extra ? "\n" + extra : "") + "\n" + msg;
+		}
+		function report(kind, err, extra) {
+			try {
+				var text = describe(kind, err, extra);
+				// Collapse exact repeats (e.g. an error thrown every frame).
+				if (errors.length && errors[errors.length - 1].raw === text) { errors[errors.length - 1].count++; return; }
+				errors.push({ raw: text, text: text, count: 1 });
+				lsSet(ERROR_KEY, JSON.stringify({ at: Date.now(), session: session, kind: kind, stage: current.stage,
+					text: text, ua: current.ua }));
+				if (document.body) render();
+				else document.addEventListener("DOMContentLoaded", render, { once: true });
+			} catch (e) {}
+		}
+		window.__eaglerXRReportError = report;
+		if (enabled) {
+			window.addEventListener("error", function (ev) {
+				if (!ev || (!ev.error && !ev.message)) return; // resource load errors (missing optional script)
+				var m = String(ev.message || "");
+				if (/ResizeObserver loop/.test(m)) return;
+				var where = ev.filename ? ev.filename.slice(0, 120) + ":" + ev.lineno + ":" + ev.colno : "";
+				var kind = (typeof WebAssembly !== "undefined" && ev.error instanceof WebAssembly.RuntimeError) ? "wasm-trap" : "error";
+				report(kind, ev.error || m, where);
+			});
+			window.addEventListener("unhandledrejection", function (ev) {
+				var r = ev && ev.reason;
+				var kind = (typeof WebAssembly !== "undefined" && (r instanceof WebAssembly.RuntimeError || r instanceof WebAssembly.CompileError
+					|| r instanceof WebAssembly.LinkError)) ? "wasm" : "unhandled-rejection";
+				report(kind, r);
+			});
+			// webglcontextlost does not bubble; a capturing window listener still sees it.
+			window.addEventListener("webglcontextlost", function (ev) {
+				report("webglcontextlost", "The WebGL context was lost (GPU reset or memory pressure). The game cannot render until reload.",
+					ev && ev.target && ev.target.id ? "canvas #" + ev.target.id : "");
+			}, true);
+		}
+
+		// ---- show what happened last time ----------------------------------------------
+		function showPrevious() {
+			if (!enabled || !host()) return;
+			var lines = [];
+			if (previousDied) {
+				lines.push("The previous " + (previousStage.state === "running" ? "session" : "load") + " stopped at stage '" + previousStage.stage + "' after "
+					+ Math.round((previousStage.ms || 0) / 1000) + "s (JS heap " + previousStage.heap + ", "
+					+ new Date(previousStage.at || 0).toLocaleString() + ").");
+				lines.push("No error was caught, so the tab was most likely killed (out of memory) or the browser crashed.");
+				if (previousStage.history && previousStage.history.length) lines.push("Last stages:\n  " + previousStage.history.slice(-8).join("\n  "));
+			}
+			if (previousError && previousError.text) {
+				lines.push("Last saved error (" + new Date(previousError.at || 0).toLocaleString() + "):\n" + previousError.text);
+			}
+			if (!lines.length) return;
+			var bar = el("div", "pointer-events:auto;max-height:40vh;overflow:auto;"
+				+ "background:rgba(25,25,25,.95);color:#fff;border:2px solid #fb3;border-radius:6px;padding:10px 12px;"
+				+ "font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;box-sizing:border-box");
+			bar.id = "eaglerxr-previous-load";
+			bar.appendChild(el("div", "font:700 15px sans-serif;color:#fc6;margin-bottom:4px", "EaglerXR: previous attempt"));
+			bar.appendChild(el("div", "", lines.join("\n\n")));
+			var row = el("div", "");
+			row.appendChild(btn("Copy", function (b) {
+				try { navigator.clipboard.writeText(lines.join("\n\n")).then(function () { b.textContent = "Copied"; }, function () { b.textContent = "Copy failed"; }); }
+				catch (e) { b.textContent = "Copy failed"; }
+			}));
+			row.appendChild(btn("Dismiss", function () { if (bar.parentNode) bar.parentNode.removeChild(bar); }));
+			row.appendChild(btn("Clear", function () { lsDel(ERROR_KEY); if (bar.parentNode) bar.parentNode.removeChild(bar); }));
+			bar.appendChild(row);
+			hostEl.appendChild(bar);
+		}
+		if (previousDied || (previousError && previousError.text)) {
+			if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", showPrevious, { once: true });
+			else showPrevious();
+		}
+	})();
+	</script>
+	<!-- EAGLERXR_SINGLE_FILE_PAYLOADS -->
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
 	<title>Eaglercraft 26.2 u1</title>
 	<link rel="icon" type="image/png" href="favicon.png" />
@@ -180,6 +386,7 @@
 					write(JOURNAL_KEY, journal);
 				}
 				function fatal(kind, error) {
+					try { if (window.__eaglerXRReportError && kind !== "wasm-trap" && kind !== "memory-pressure") window.__eaglerXRReportError("fatal:" + (kind || "unknown"), error); } catch (e) {}
 					journal.state = "fatal";
 					journal.fatalKind = kind || "unknown";
 					journal.error = "" + (error && (error.stack || error.message || error));
@@ -188,6 +395,7 @@
 				window.__eaglerCrashJournal = {
 					stage: function (name) {
 						journal.stage = name || journal.stage;
+						try { if (window.__eaglerXRStage) window.__eaglerXRStage(name, name === "game-ready" ? "running" : null); } catch (e) {}
 						if (name === "game-ready" && journal.state !== "fatal") journal.state = "running";
 						save();
 					},
@@ -403,8 +611,33 @@
 		// reject a second 100 MB Wasm compilation with InternalError: out of memory.
 		// Keep hosted/Quest launches on the worker path, but make local standalone
 		// downloads safe by compiling only the client image.
-		window.__eaglerLowMemoryShell = location.protocol === "file:" ||
+		// EaglerXR: a headset opening the file:// download keeps the server worker (singleplayer
+		// needs it on Wasm-GC) and uses the sequential compile below instead.
+		window.__eaglerLowMemoryShell = (location.protocol === "file:"
+				&& !/OculusBrowser|Quest|Pico|Wolvic|MetaQuest/i.test(navigator.userAgent || "")) ||
 			(/Firefox\//.test(navigator.userAgent) && (!navigator.deviceMemory || navigator.deviceMemory <= 4));
+		// EaglerXR: standalone headset browsers (Meta Quest Browser, Pico, Wolvic) kill the
+		// whole tab when it runs out of memory. The biggest spike of the load is compiling the
+		// ~103 MB client, ~43 MB server and ~18 MB mesh Wasm images at the same time, so on
+		// headsets (and devices reporting <= 4 GB) the images are compiled one after another
+		// and the client's raw bytes are released before the worker images start. Mesh workers
+		// (each one is another Java heap) default off on headsets; the server worker stays on
+		// because the Wasm-GC client has no single-thread integrated server.
+		// Overrides: ?seqwasm=0/1 (or localStorage['eaglerxr.sequentialWasm'] = '0'/'1'), ?mesh=1.
+		window.__eaglerStandaloneHeadset = /OculusBrowser|Quest|Pico|Wolvic|MetaQuest/i.test(navigator.userAgent || "");
+		window.__eaglerSequentialWasm = window.__eaglerStandaloneHeadset ||
+			(typeof navigator.deviceMemory === "number" && navigator.deviceMemory > 0 && navigator.deviceMemory <= 4);
+		(function () {
+			var forced = /[?&]seqwasm=([01])(?:&|$)/.exec(window.location.search);
+			var stored = null;
+			try { stored = localStorage.getItem("eaglerxr.sequentialWasm"); } catch (e) {}
+			if (forced) window.__eaglerSequentialWasm = forced[1] === "1";
+			else if (stored === "1" || stored === "0") window.__eaglerSequentialWasm = stored === "1";
+			try {
+				window.__eaglerXRStage && window.__eaglerXRStage("shell-options headset=" + window.__eaglerStandaloneHeadset
+					+ " sequentialWasm=" + window.__eaglerSequentialWasm + " lowMemoryShell=" + window.__eaglerLowMemoryShell);
+			} catch (e) {}
+		})();
 		// The hosted release may point this at a signed bundle on a separate
 		// large-file origin. An empty value keeps the preview download disabled.
 		window.eaglercraftXIwaBundleURL = "";
@@ -428,7 +661,8 @@
 			singleThreadMode: true,
 				serverWorker: !window.__eaglerLowMemoryShell && window.location.search.indexOf("singlethread") < 0,
 				meshWorkers: !window.__eaglerLowMemoryShell && window.location.search.indexOf("singlethread") < 0
-					&& window.location.search.indexOf("nomesh") < 0,
+					&& window.location.search.indexOf("nomesh") < 0
+					&& (!window.__eaglerStandaloneHeadset || /[?&]mesh=1(?:&|$)/.test(window.location.search)),
 				meshWorkerVerify: false,
 				perfDebug: window.__eaglerPerfEnabled,
 				chunkUnloadHardCap: window.__eaglerChunkUnloadHardCap,
@@ -464,7 +698,8 @@
 			};
 		})();
 	</script>
-	<!-- Optional WebXR launcher bridge; inert when WebXR is unavailable. -->
+	<!-- Legacy WebXR launcher bridge; installs nothing unless ?xrlauncher=1 (the in-game
+	     Enter VR button replaces it). -->
 	<script type="text/javascript" src="eaglerxr_launcher.js?v=1"></script>
 	<!-- Opens the VR companion tab and receives its WebXR poses; see eaglerxr_link.js. -->
 	<script type="text/javascript" src="eaglerxr_link.js?v=1"></script>
@@ -483,14 +718,16 @@
 					const compileMesh = window.eaglercraftXOpts && window.eaglercraftXOpts.meshWorkers === true;
 					const compileServer = __EAGLER_SERVER_WORKER_AVAILABLE__ && window.eaglercraftXOpts
 						&& window.eaglercraftXOpts.serverWorker === true;
-					const meshModulePromise = compileMesh ? WebAssembly.compileStreaming(
+					const sequential = window.__eaglerSequentialWasm === true;
+					const stage = (name) => { try { if (window.__eaglerXRStage) window.__eaglerXRStage(name); } catch (e) {} };
+					const compileMeshModule = () => compileMesh ? WebAssembly.compileStreaming(
 							fetch("mesh-worker.wasm?v=__EAGLER_BUILD_ID__"), { builtins: ["js-string"] }
 						).catch(async (meshStreamErr) => {
 							window.__log.push("W:[shell] mesh compileStreaming failed (" + meshStreamErr + "), falling back to byte fetch");
 							const meshResp = await fetch("mesh-worker.wasm?v=__EAGLER_BUILD_ID__");
 							return WebAssembly.compile(await meshResp.arrayBuffer(), { builtins: ["js-string"] });
 						}) : Promise.resolve(null);
-					const serverModulePromise = compileServer ? WebAssembly.compileStreaming(
+					const compileServerModule = () => compileServer ? WebAssembly.compileStreaming(
 						fetch("server-worker.wasm?v=__EAGLER_BUILD_ID__"), { builtins: ["js-string"] }
 					).catch(async (serverStreamErr) => {
 						window.__log.push("W:[shell] server compileStreaming failed (" + serverStreamErr + "), falling back to byte fetch");
@@ -502,20 +739,38 @@
 							return null;
 						}
 					}) : Promise.resolve(null);
+					// Parallel (desktop): the worker images compile alongside the client.
+					// Sequential (EaglerXR: headsets / <= 4 GB devices): they start only after the
+					// client is compiled and its raw bytes are released, to keep the peak low.
+					const meshModulePromise = sequential ? null : compileMeshModule();
+					const serverModulePromise = sequential ? null : compileServerModule();
+					stage(sequential ? "wasm-compile-client (sequential)" : "wasm-compile-client+workers (parallel)");
 					try {
 						module = await WebAssembly.compileStreaming(fetch("classes.wasm?v=__EAGLER_BUILD_ID__"), { builtins: ["js-string"] });
 						window.__log.push("L:[shell] wasm compileStreaming path OK");
 					} catch (streamErr) {
 						window.__log.push("L:[shell] compileStreaming failed (" + streamErr + "), falling back to byte fetch");
+						stage("wasm-compile-client-bytes-fallback");
 						const resp = await fetch("classes.wasm?v=__EAGLER_BUILD_ID__");
 						const bytes = await resp.arrayBuffer();
 						window.__log.push("L:[shell] fetched classes.wasm " + bytes.byteLength + " bytes");
 						module = await WebAssembly.compile(bytes, { builtins: ["js-string"] });
 					}
+					stage("wasm-client-compiled");
 					// Worker images are optional. Low-memory file:// launches intentionally
 					// leave them null so Firefox never compiles multiple large modules at once.
-					const workerModules = await Promise.all([meshModulePromise, serverModulePromise]);
+					let workerModules = sequential ? null : await Promise.all([meshModulePromise, serverModulePromise]);
+					// The single-file build releases the inline Wasm bytes right after this line,
+					// so in sequential mode the client's raw image is freed before the workers compile.
 					window.__eaglerWasmModule = module;
+					if (sequential) {
+						stage("wasm-compile-server-worker");
+						const serverModule = await compileServerModule();
+						stage("wasm-compile-mesh-worker");
+						const meshModule = await compileMeshModule();
+						workerModules = [meshModule, serverModule];
+					}
+					stage("wasm-workers-compiled");
 					window.__eaglerMeshWasmModule = workerModules[0];
 					window.__eaglerServerWasmModule = workerModules[1];
 					window.__log.push(compileServer

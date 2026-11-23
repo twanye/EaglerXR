@@ -388,6 +388,21 @@
         latestPose: function () { return latest; }
     };
 
-    if (document.readyState === "complete") autoOpen();
-    else global.addEventListener("load", autoOpen, { once: true });
+    // EaglerXR: never open a second tab (or arm the first-click popup) while the game is
+    // still loading: on a standalone headset the loading tab would be backgrounded, and
+    // Quest Browser discards background tabs under memory pressure. Standalone headsets
+    // also do not need the companion at all (the game tab enters VR itself via the in-game
+    // Enter VR button), so they only open it on ?xrcompanion=1.
+    var standaloneHeadset = /OculusBrowser|Quest|Pico|Wolvic|MetaQuest/i.test((global.navigator && navigator.userAgent) || "");
+    function autoOpenWhenReady() {
+        if (autoOpenMode === "0" || (standaloneHeadset && autoOpenMode !== "1")) return;
+        var started = Date.now();
+        (function wait() {
+            if (global.__eaglerGameReady === true) { setTimeout(autoOpen, 1500); return; }
+            if (Date.now() - started > 600000) return; // never reached the game: stay out of the way
+            setTimeout(wait, 1000);
+        })();
+    }
+    if (document.readyState === "complete") autoOpenWhenReady();
+    else global.addEventListener("load", autoOpenWhenReady, { once: true });
 }(typeof window !== "undefined" ? window : this));
