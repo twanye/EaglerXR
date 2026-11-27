@@ -731,6 +731,12 @@ public class GameRenderer implements AutoCloseable, TrackedWaypoint.Projector {
          }
 
          projectionMatrix.mul(bobStack.last().pose());
+      } else if (!net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.isHurtCamSuppressed()) {
+         // EaglerXR: VR Settings "Hurt camera comfort" off - vanilla damage tilt/shake in the headset
+         // too (view bobbing stays off in VR). On (default, as in Vivecraft) it is skipped.
+         PoseStack bobStack = new PoseStack();
+         this.bobHurt(cameraState, bobStack);
+         projectionMatrix.mul(bobStack.last().pose());
       }
       float screenEffectScale = optionsState.screenEffectScale;
       float portalIntensity = Mth.lerp(worldPartialTicks, player.oPortalEffectIntensity, player.portalEffectIntensity);

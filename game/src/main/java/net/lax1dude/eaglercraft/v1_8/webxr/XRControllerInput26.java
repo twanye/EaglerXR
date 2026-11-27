@@ -1,12 +1,20 @@
 package net.lax1dude.eaglercraft.v1_8.webxr;
 
 import net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
@@ -89,6 +97,22 @@ public final class XRControllerInput26 {
 	private static boolean optAutoSprint = true;
 	private static float optSprintThreshold = 0.9F;
 	private static boolean optLeftHanded;
+	private static boolean optRoomscale = true;
+	private static boolean optHurtComfort = true;
+
+	// Roomscale swinging (Vivecraft-style): controller tip tracked per game tick.
+	/** Tip speed (m/s, room space) that counts as a swing; Vivecraft's SwingTracker uses 2.5 (x1.5 in creative). */
+	private static final float SWING_SPEED = 2.5F;
+	/** Distance of the "weapon tip" along the controller ray (Vivecraft measures speed 0.3 m out). */
+	private static final float TIP_LENGTH = 0.3F;
+	/** Extra reach around entity hitboxes for a hand swing (Vivecraft entityReachAdd default 0.3). */
+	private static final double ENTITY_HIT_MARGIN = 0.3;
+	private static final long ROOMSCALE_HOLD_MS = 1500L;
+	private static Vector3f rsLastTipRef;
+	private static Vec3 rsLastTipWorld;
+	private static boolean rsWeaponSolid;
+	private static long rsLastHitMs;
+	private static final List<Entity> rsHitEntities = new ArrayList<>();
 
 	// Button hysteresis state, [slot][index into BUTTONS].
 	private static final boolean[][] down = new boolean[2][BUTTONS.length];
@@ -523,6 +547,122 @@ public final class XRControllerInput26 {
 	}
 
 	/**
+	 * Maps a point in the XR reference space to the world, like {@link #computeRay}: turned by the
+	 * world yaw and anchored so the XR head position is the entity's eye. Null if implausible.
+	 */
+	private static Vec3 refToWorld(final Entity entity, final Vector3f refPoint, final float partialTicks) {
+		float[] f = PlatformWebXR.getFrameData();
+		float baseYaw = getWorldYaw(entity);
+		if (Float.isNaN(baseYaw)) {
+			baseYaw = entity.getViewYRot(partialTicks);
+		}
+		Vector3f offset = new Vector3f(refPoint.x - f[1], refPoint.y - f[2], refPoint.z - f[3]);
+		if (!(offset.lengthSquared() <= (MAX_HAND_OFFSET + TIP_LENGTH) * (MAX_HAND_OFFSET + TIP_LENGTH))) {
+			return null;
+		}
+		new Quaternionf().rotationY((float) Math.PI - baseYaw * DEG_TO_RAD).transform(offset);
+		Vec3 eye = entity.getEyePosition(partialTicks);
+		return new Vec3(eye.x + offset.x, eye.y + offset.y, eye.z + offset.z);
+	}
+
+	/**
+	 * Roomscale swinging, once per game tick (Vivecraft's SwingTracker, reimplemented): the main
+	 * controller's tip (0.3 m along its ray) is tracked in room space for speed and in the world for
+	 * hits. A swing faster than {@link #SWING_SPEED} through an entity's hitbox attacks it once per
+	 * swing; one that enters a block from outside starts / continues mining it with 3 to 7 "ticks" of
+	 * progress (faster = more), like Vivecraft. The trigger keeps working as before.
+	 */
+	public static void tickRoomscale(final Minecraft minecraft) {
+		LocalPlayer player = minecraft.player;
+		int main = aimSlot();
+		if (!optRoomscale || main < 0 || player == null || minecraft.level == null || minecraft.gameMode == null
+			|| minecraft.gui.screen() != null || minecraft.gui.overlay() != null || player.isSpectator()) {
+			rsLastTipRef = null;
+			rsLastTipWorld = null;
+			rsWeaponSolid = false;
+			rsHitEntities.clear();
+			return;
+		}
+		float[] c = PlatformWebXR.getControllerData();
+		int o = PlatformWebXR.controllerOffset(main);
+		Quaternionf q = new Quaternionf(c[o + 5], c[o + 6], c[o + 7], c[o + 8]);
+		if (q.lengthSquared() < 1.0E-6F) {
+			return;
+		}
+		q.normalize();
+		Vector3f tipRef = q.transform(new Vector3f(0.0F, 0.0F, -TIP_LENGTH)).add(c[o + 2], c[o + 3], c[o + 4]);
+		Vec3 tipWorld = refToWorld(player, tipRef, 1.0F);
+		Vector3f lastRef = rsLastTipRef;
+		Vec3 lastWorld = rsLastTipWorld;
+		rsLastTipRef = tipRef;
+		rsLastTipWorld = tipWorld;
+		if (tipWorld == null || lastWorld == null || lastRef == null) {
+			rsWeaponSolid = false;
+			return;
+		}
+		float speed = tipRef.distance(lastRef) / 0.05F;
+		boolean fast = speed > SWING_SPEED * (player.getAbilities().instabuild ? 1.5F : 1.0F);
+		boolean attackHeld = minecraft.options.keyAttack.isDown();
+		long now = System.currentTimeMillis();
+
+		boolean hitEntity = false;
+		if (!fast) {
+			rsHitEntities.clear();
+		} else if (!attackHeld) {
+			AABB sweep = new AABB(lastWorld, tipWorld).inflate(ENTITY_HIT_MARGIN + 0.5);
+			for (Entity e : minecraft.level.getEntities(player, sweep, x -> x.isPickable() && x.isAlive() && x != player.getVehicle())) {
+				AABB box = e.getBoundingBox().inflate(ENTITY_HIT_MARGIN);
+				if (!box.contains(tipWorld) && !box.clip(lastWorld, tipWorld).isPresent()) {
+					continue;
+				}
+				hitEntity = true;
+				if (rsHitEntities.contains(e)) {
+					continue;
+				}
+				rsHitEntities.add(e);
+				if (player.isWithinEntityInteractionRange(e, 1.0)) {
+					minecraft.gameMode.attack(player, e);
+					player.swing(InteractionHand.MAIN_HAND);
+					rsLastHitMs = now;
+				}
+			}
+		}
+		if (hitEntity) {
+			return;
+		}
+
+		BlockHitResult hit = minecraft.level.clip(new ClipContext(lastWorld, tipWorld, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+		boolean solid = hit.getType() == HitResult.Type.BLOCK;
+		if (solid && !rsWeaponSolid && fast && !attackHeld && !hit.isInside()) {
+			BlockPos pos = hit.getBlockPos();
+			if (!minecraft.level.getBlockState(pos).isAir() && player.isWithinBlockInteractionRange(pos, 1.0)) {
+				Direction dir = hit.getDirection();
+				int hits = 3 + (int) Math.min(speed - SWING_SPEED, 4.0F);
+				minecraft.gameMode.eaglerClearDestroyDelay();
+				minecraft.gameMode.startDestroyBlock(pos, dir);
+				for (int i = 0; i < hits && minecraft.gameMode.isDestroying(); ++i) {
+					if (minecraft.gameMode.continueDestroyBlock(pos, dir)) {
+						minecraft.level.addBreakingBlockEffect(pos, dir);
+					}
+				}
+				minecraft.gameMode.eaglerClearDestroyDelay();
+				player.swing(InteractionHand.MAIN_HAND);
+				rsLastHitMs = now;
+			}
+		}
+		rsWeaponSolid = solid;
+	}
+
+	/**
+	 * True shortly after a roomscale hit while a block is still being mined, so the vanilla
+	 * "attack key released" path does not abort the progress between swings.
+	 */
+	public static boolean isRoomscaleMining(final Minecraft minecraft) {
+		return optRoomscale && PlatformWebXR.isPresenting() && minecraft.gameMode != null && minecraft.gameMode.isDestroying()
+			&& System.currentTimeMillis() - rsLastHitMs < ROOMSCALE_HOLD_MS;
+	}
+
+	/**
 	 * In-game laser length for the web layer: distance from the controller to the
 	 * hit (metres = blocks), negative reach when nothing is hit, 0 for no laser.
 	 */
@@ -561,6 +701,18 @@ public final class XRControllerInput26 {
 		optAutoSprint = PlatformWebXR.getConfig("autoSprint", 1.0F) != 0.0F;
 		optSprintThreshold = clamp(PlatformWebXR.getConfig("sprintThreshold", 0.9F), 0.3F, 1.0F);
 		optLeftHanded = PlatformWebXR.getConfig("leftHanded", 0.0F) != 0.0F;
+		optRoomscale = PlatformWebXR.getConfig(VRSettingsScreen.ROOMSCALE, 1.0F) != 0.0F;
+		optHurtComfort = PlatformWebXR.getConfig(VRSettingsScreen.HURT_COMFORT, 1.0F) != 0.0F;
+	}
+
+	/** Re-reads the options on the next frame (called by the VR Settings screen when one changes). */
+	public static void reloadOptions() {
+		optionsLoaded = false;
+	}
+
+	/** True while presenting with hurt-camera comfort on: the damage tilt/shake is not applied to the headset view. */
+	public static boolean isHurtCamSuppressed() {
+		return PlatformWebXR.isPresenting() && optHurtComfort;
 	}
 
 	private static float clamp(final float v, final float lo, final float hi) {

@@ -558,6 +558,11 @@ public class MultiPlayerGameMode {
       return this.localPlayerMode;
    }
 
+   /** EaglerXR: roomscale hits continue mining right away (Vivecraft resets the delay the same way). */
+   public void eaglerClearDestroyDelay() {
+      this.destroyDelay = 0;
+   }
+
    public boolean isDestroying() {
       return this.isDestroying;
    }

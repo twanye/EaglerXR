@@ -1786,6 +1786,10 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
       if (!down) {
          this.missTime = 0;
       }
+      // EaglerXR: keep the progress of a roomscale (swing) hit between swings.
+      if (!down && net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.isRoomscaleMining(this)) {
+         return;
+      }
 
       if (this.missTime <= 0 && !this.player.isUsingItem()) {
          ItemStack heldItem = this.player.getItemInHand(InteractionHand.MAIN_HAND);
@@ -2003,6 +2007,8 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
       if (this.gui.overlay() == null && this.gui.screen() == null) {
          profiler.popPush("Keybindings");
          this.handleKeybinds();
+         // EaglerXR: roomscale swing-to-mine / swing-to-attack (no-op unless presenting).
+         net.lax1dude.eaglercraft.v1_8.webxr.XRControllerInput26.tickRoomscale(this);
          if (this.missTime > 0) {
             this.missTime--;
          }

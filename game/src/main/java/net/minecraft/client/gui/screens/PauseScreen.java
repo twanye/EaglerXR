@@ -107,6 +107,11 @@ public class PauseScreen extends Screen {
                button.active = false;
             }
          }).width(204).build(), 2);
+         if (presenting) {
+            // EaglerXR: VR settings are reachable from the pause menu while in the headset.
+            helper.addChild(Button.builder(Component.literal("VR Settings..."), button -> this.minecraft.gui.setScreen(
+               new net.lax1dude.eaglercraft.v1_8.webxr.VRSettingsScreen(this, this.minecraft.options))).width(204).build(), 2);
+         }
       }
       helper.addChild(this.openScreenButton(ADVANCEMENTS, () -> new AdvancementsScreen(this.minecraft.player.connection.getAdvancements(), this)));
       helper.addChild(this.openScreenButton(STATS, () -> new StatsScreen(this, this.minecraft.player.getStats())));
