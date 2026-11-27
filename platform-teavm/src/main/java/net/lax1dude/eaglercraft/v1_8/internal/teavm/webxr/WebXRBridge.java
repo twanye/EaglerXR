@@ -280,7 +280,7 @@ public final class WebXRBridge {
 		      // tilted 30 degrees towards the user; the top edge points along the controller.
 		      var cq = { x: c[oo + 5], y: c[oo + 6], z: c[oo + 7], w: c[oo + 8] };
 		      var pq = S.qmul(cq, { x: Math.sin(-Math.PI / 6), y: 0, z: 0, w: Math.cos(-Math.PI / 6) });
-		      var hw = 0.3, off = S.qrot(cq, 0, 0.07, 0.1);
+		      var hw = 0.3, off = S.qrot(cq, 0, 0.1, 0.1);
 		      G.hudPanel = { m: S.qmat(pq, c[oo + 2] + off[0], c[oo + 3] + off[1], c[oo + 4] + off[2]), w: hw, h: hw * aspect, back: 0.3 };
 		      G.hudYaw = null;
 		    } else if (hm === 2) {

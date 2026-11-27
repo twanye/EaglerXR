@@ -221,7 +221,7 @@ button and the floating DOM button still work.
 Like Vivecraft's HUD lock, VR Settings > **HUD** picks where the in-game HUD
 (hotbar, hearts, chat...) is drawn; the web layer places the same GUI image:
 - **Face** (default): head-locked, 1.1 m ahead and 6 cm low, 0.95 m wide (~46 deg).
-- **Hand**: a 0.3 m panel lying on the back of the off-hand controller (7 cm above
+- **Hand**: a 0.3 m panel lying on the back of the off-hand controller (10 cm above
   the controller, 10 cm towards the wrist), tilted 30 deg towards you; raise your
   off hand and look at it. Falls back to Face when the off controller is not tracked.
 - **Floating**: the previous panel, 1.3 m ahead and lower, following head yaw lazily.
