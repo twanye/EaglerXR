@@ -2014,6 +2014,9 @@ public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements 
          }
       }
 
+      // EaglerXR: Vivecraft server protocol pose updates (off by default).
+      net.lax1dude.eaglercraft.v1_8.webxr.VivecraftNetwork26.tick(this);
+
       if (eaglerPerfEnabled) {
          long now = Util.getNanos();
          EaglerClientPerf.clientTickPhase(EaglerClientPerf.TICK_GUI_KEYS, now - eaglerPhaseStarted);

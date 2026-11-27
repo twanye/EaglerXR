@@ -69,6 +69,9 @@ public class ClientConfigurationPacketListenerImpl extends ClientCommonPacketLis
 
    @Override
    protected void handleCustomPayload(final CustomPacketPayload payload) {
+      if (payload instanceof net.minecraft.network.protocol.common.custom.EaglerRawPayload) {
+         return; // EaglerXR: raw plugin channels are only used in the play phase
+      }
       this.handleUnknownCustomPayload(payload);
    }
 

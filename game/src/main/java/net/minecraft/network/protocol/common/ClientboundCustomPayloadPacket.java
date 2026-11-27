@@ -15,7 +15,8 @@ import net.minecraft.util.Util;
 public record ClientboundCustomPayloadPacket(CustomPacketPayload payload) implements Packet<ClientCommonPacketListener> {
    private static final int MAX_PAYLOAD_SIZE = 1048576;
    public static final StreamCodec<RegistryFriendlyByteBuf, ClientboundCustomPayloadPacket> GAMEPLAY_STREAM_CODEC = CustomPacketPayload.<RegistryFriendlyByteBuf>codec(
-         id -> DiscardedPayload.codec(id, 1048576),
+         // EaglerXR: vivecraft:data / minecraft:register keep their bytes (EaglerRawPayload)
+         id -> net.minecraft.network.protocol.common.custom.EaglerRawPayload.<RegistryFriendlyByteBuf>fallback(id, 1048576),
          Util.make(
             Lists.<CustomPacketPayload.TypeAndCodec<? super RegistryFriendlyByteBuf, ?>>newArrayList(
                new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC)
@@ -25,7 +26,7 @@ public record ClientboundCustomPayloadPacket(CustomPacketPayload payload) implem
       )
       .map(ClientboundCustomPayloadPacket::new, ClientboundCustomPayloadPacket::payload);
    public static final StreamCodec<FriendlyByteBuf, ClientboundCustomPayloadPacket> CONFIG_STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
-         id -> DiscardedPayload.codec(id, 1048576), List.of(new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC))
+         id -> net.minecraft.network.protocol.common.custom.EaglerRawPayload.<FriendlyByteBuf>fallback(id, 1048576), List.of(new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC))
       )
       .map(ClientboundCustomPayloadPacket::new, ClientboundCustomPayloadPacket::payload);
 

@@ -654,6 +654,52 @@ public final class XRControllerInput26 {
 	}
 
 	/**
+	 * Head, main-hand and off-hand poses for the Vivecraft network protocol: each
+	 * {x, y, z, qx, qy, qz, qw} with the position relative to the player's feet and the
+	 * orientation in world axes (local -Z = forward / pointing), or null when unavailable.
+	 */
+	public static float[][] networkPoses(final LocalPlayer player) {
+		if (!PlatformWebXR.isPresenting() || player == null) {
+			return null;
+		}
+		float[] f = PlatformWebXR.getFrameData();
+		float[] c = PlatformWebXR.getControllerData();
+		float baseYaw = getWorldYaw(player);
+		if (Float.isNaN(baseYaw)) {
+			baseYaw = player.getViewYRot(1.0F);
+		}
+		Quaternionf body = new Quaternionf().rotationY((float) Math.PI - baseYaw * DEG_TO_RAD);
+		Vec3 feet = player.position();
+		Quaternionf head = new Quaternionf(f[4], f[5], f[6], f[7]);
+		if (head.lengthSquared() < 1.0E-6F) {
+			return null;
+		}
+		float[][] out = new float[3][];
+		out[0] = VivecraftNetwork26.pose(player.getEyePosition(1.0F).subtract(feet), new Quaternionf(body).mul(head.normalize()));
+		int main = aimSlot();
+		for (int k = 0; k < 2; ++k) {
+			int slot = main < 0 ? -1 : (k == 0 ? main : 1 - main);
+			if (slot < 0 || c[PlatformWebXR.controllerOffset(slot)] == 0.0F) {
+				continue;
+			}
+			int o = PlatformWebXR.controllerOffset(slot);
+			Quaternionf q = new Quaternionf(c[o + 5], c[o + 6], c[o + 7], c[o + 8]);
+			Vec3 world = refToWorld(player, new Vector3f(c[o + 2], c[o + 3], c[o + 4]), 1.0F);
+			if (world == null || q.lengthSquared() < 1.0E-6F) {
+				continue;
+			}
+			out[k + 1] = VivecraftNetwork26.pose(world.subtract(feet), new Quaternionf(body).mul(q.normalize()));
+		}
+		if (out[1] == null) {
+			out[1] = out[2] != null ? out[2] : out[0];
+		}
+		if (out[2] == null) {
+			out[2] = out[1];
+		}
+		return out;
+	}
+
+	/**
 	 * True shortly after a roomscale hit while a block is still being mined, so the vanilla
 	 * "attack key released" path does not abort the progress between swings.
 	 */
