@@ -82,6 +82,10 @@ public class OptionsScreen extends Screen implements HasGamemasterPermissionReac
       );
       helper.addChild(this.openScreenButton(ACCESSIBILITY, () -> new AccessibilityOptionsScreen(this, this.options)));
       helper.addChild(this.openScreenButton(CREDITS_AND_ATTRIBUTION, () -> new CreditsAndAttributionScreen(this)));
+      if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.hasWebXR() || net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
+         // EaglerXR: VR settings (stored in localStorage eaglerxr.*).
+         helper.addChild(this.openScreenButton(Component.literal("VR Settings..."), () -> new net.lax1dude.eaglercraft.v1_8.webxr.VRSettingsScreen(this, this.options)));
+      }
       this.layout.addToContents(gridLayout);
       this.layout.addToFooter(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose()).width(200).build());
       this.layout.visitWidgets(x$0 -> this.addRenderableWidget(x$0));

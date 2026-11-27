@@ -13,7 +13,8 @@ import net.minecraft.util.Util;
 public record ServerboundCustomPayloadPacket(CustomPacketPayload payload) implements Packet<ServerCommonPacketListener> {
    private static final int MAX_PAYLOAD_SIZE = 32767;
    public static final StreamCodec<FriendlyByteBuf, ServerboundCustomPayloadPacket> STREAM_CODEC = CustomPacketPayload.<FriendlyByteBuf>codec(
-         id -> DiscardedPayload.codec(id, 32767),
+         // EaglerXR: vivecraft:data / minecraft:register keep their bytes (EaglerRawPayload)
+         id -> net.minecraft.network.protocol.common.custom.EaglerRawPayload.<FriendlyByteBuf>fallback(id, 32767),
          Util.make(
             Lists.<CustomPacketPayload.TypeAndCodec<? super FriendlyByteBuf, ?>>newArrayList(
                new CustomPacketPayload.TypeAndCodec<>(BrandPayload.TYPE, BrandPayload.STREAM_CODEC)

@@ -543,6 +543,8 @@ public class ClientPacketListener extends ClientCommonPacketListenerImpl impleme
          seaLevel
       );
       this.minecraft.setLevel(this.level);
+      // EaglerXR: (re)announce Vivecraft support on login, as Vivecraft does (no-op unless enabled).
+      net.lax1dude.eaglercraft.v1_8.webxr.VivecraftNetwork26.onJoin(this);
       if (this.minecraft.player == null) {
          this.minecraft.player = this.minecraft.gameMode.createPlayer(this.level, new StatsCounter(), new ClientRecipeBook());
          this.minecraft.player.setYRot(-180.0F);
@@ -1353,6 +1355,7 @@ public class ClientPacketListener extends ClientCommonPacketListenerImpl impleme
          );
          this.level.addMapData(mapData);
          this.minecraft.setLevel(this.level);
+         net.lax1dude.eaglercraft.v1_8.webxr.VivecraftNetwork26.onJoin(this);
          this.debugSubscriber.dropLevel();
       }
 
@@ -2278,6 +2281,11 @@ public class ClientPacketListener extends ClientCommonPacketListenerImpl impleme
 
    @Override
    public void handleCustomPayload(final CustomPacketPayload payload) {
+      // EaglerXR: Vivecraft server protocol (vivecraft:data) and channel registration.
+      if (payload instanceof net.minecraft.network.protocol.common.custom.EaglerRawPayload raw
+         && net.lax1dude.eaglercraft.v1_8.webxr.VivecraftNetwork26.handle(raw)) {
+         return;
+      }
       this.handleUnknownCustomPayload(payload);
    }
 

@@ -90,6 +90,8 @@ public final class WebXRBridge {
 		B.sd = new Float32Array(62); B.vsync = [];
 		// Controller snapshot, 2 slots x 16 floats (slot 0 = left, 1 = right), see PlatformWebXR.
 		B.cd = new Float32Array(32);
+		// Grip poses (JS only, used to draw the hands): 2 slots x 8 = [valid, x, y, z, qx, qy, qz, qw].
+		B.gp = new Float32Array(16);
 		// VR GUI panel state. gd = [panel mode, -, hit0, u0, v0, hit1, u1, v1] (v from the top), see PlatformWebXR.
 		B.gd = new Float32Array(8);
 		B.gui = { mode: 0, laser: 0, aim: 1, tex: null, fbo: null, w: 0, h: 0, ready: false, lastMode: 0,
@@ -102,6 +104,24 @@ public final class WebXRBridge {
 		S.report = function (where, e) {
 		  try { console.error('eaglerxr: ' + where, e); } catch (x) { }
 		  try { if (globalThis.__eaglerXRReportError) globalThis.__eaglerXRReportError('webxr:' + where, e); } catch (x) { }
+		};
+		// VR options (globalThis.eaglerXRConfig, else localStorage 'eaglerxr.<key>'), cached until the
+		// VR Settings screen writes one (PlatformWebXR.setConfig clears B.cfgCache).
+		S.cfg = function (key, def) {
+		  var C = B.cfgCache || (B.cfgCache = {});
+		  if (Object.prototype.hasOwnProperty.call(C, key)) return C[key];
+		  var v = def, c = globalThis.eaglerXRConfig;
+		  try {
+		    if (c && typeof c[key] === 'number' && isFinite(c[key])) v = c[key];
+		    else if (c && typeof c[key] === 'boolean') v = c[key] ? 1 : 0;
+		    else {
+		      var x = globalThis.localStorage && localStorage.getItem('eaglerxr.' + key);
+		      if (x === 'true') v = 1; else if (x === 'false') v = 0;
+		      else if (x !== null && x !== undefined && x !== '' && isFinite(+x)) v = +x;
+		    }
+		  } catch (e) { }
+		  C[key] = v;
+		  return v;
 		};
 		S.supported = function () {
 		  return !!(B.gl && globalThis.navigator && navigator.xr && typeof navigator.xr.requestSession === 'function' && typeof XRWebGLLayer === 'function');
@@ -203,6 +223,15 @@ public final class WebXRBridge {
 		  var tx = 2 * (qy * z - qz * y), ty = 2 * (qz * x - qx * z), tz = 2 * (qx * y - qy * x);
 		  return [x + qw * tx + (qy * tz - qz * ty), y + qw * ty + (qz * tx - qx * tz), z + qw * tz + (qx * ty - qy * tx)];
 		};
+		S.qmul = function (a, b) {
+		  return { x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+		    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z };
+		};
+		// Column-major rigid transform from a quaternion and a position.
+		S.qmat = function (q, x, y, z) {
+		  var a = S.qrot(q, 1, 0, 0), b = S.qrot(q, 0, 1, 0), d = S.qrot(q, 0, 0, 1);
+		  return new Float32Array([a[0], a[1], a[2], 0, b[0], b[1], b[2], 0, d[0], d[1], d[2], 0, x, y, z, 1]);
+		};
 		S.wrap = function (a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 		S.mul = function (a, b) {
 		  var o = new Float32Array(16);
@@ -216,6 +245,7 @@ public final class WebXRBridge {
 		  return { x: hp.x - Math.sin(yaw) * dist, y: hp.y + dy, z: hp.z - Math.cos(yaw) * dist, yaw: yaw, w: w, h: w * aspect };
 		};
 		S.model = function (p) {
+		  if (p.m) return p.m;
 		  var cs = Math.cos(p.yaw), sn = Math.sin(p.yaw);
 		  return new Float32Array([cs, 0, -sn, 0, 0, 1, 0, 0, sn, 0, cs, 0, p.x, p.y, p.z, 1]);
 		};
@@ -243,11 +273,28 @@ public final class WebXRBridge {
 		    G.screenPanel.h = G.screenPanel.w * aspect;
 		  } else { G.screenPanel = null; }
 		  if (G.mode === 1 && G.ready) {
-		    // HUD: lower in view, follows the head's yaw lazily (35 degree dead zone), never its pitch.
-		    if (G.hudYaw === null || G.lastMode !== 1) G.hudYaw = yaw;
-		    var dy = S.wrap(yaw - G.hudYaw), lim = 0.6;
-		    if (dy > lim) G.hudYaw += dy - lim; else if (dy < -lim) G.hudYaw += dy + lim;
-		    G.hudPanel = S.place(hp, G.hudYaw, 1.3, -0.22, 1.5, aspect);
+		    // HUD placement (VR Settings "HUD"; like Vivecraft's HUD lock): 0 face (default), 1 hand, 2 floating.
+		    var hm = S.cfg('hudMode', 0) | 0, offSlot = S.cfg('leftHanded', 0) ? 1 : 0, oo = offSlot * 16;
+		    if (hm === 1 && c[oo]) {
+		      // Hand HUD: lies on the back of the off-hand (above the controller, towards the wrist),
+		      // tilted 30 degrees towards the user; the top edge points along the controller.
+		      var cq = { x: c[oo + 5], y: c[oo + 6], z: c[oo + 7], w: c[oo + 8] };
+		      var pq = S.qmul(cq, { x: Math.sin(-Math.PI / 6), y: 0, z: 0, w: Math.cos(-Math.PI / 6) });
+		      var hw = 0.3, off = S.qrot(cq, 0, 0.1, 0.1);
+		      G.hudPanel = { m: S.qmat(pq, c[oo + 2] + off[0], c[oo + 3] + off[1], c[oo + 4] + off[2]), w: hw, h: hw * aspect, back: 0.3 };
+		      G.hudYaw = null;
+		    } else if (hm === 2) {
+		      // Floating HUD: lower in view, follows the head's yaw lazily (35 degree dead zone), never its pitch.
+		      if (G.hudYaw === null || G.lastMode !== 1) G.hudYaw = yaw;
+		      var dy = S.wrap(yaw - G.hudYaw), lim = 0.6;
+		      if (dy > lim) G.hudYaw += dy - lim; else if (dy < -lim) G.hudYaw += dy + lim;
+		      G.hudPanel = S.place(hp, G.hudYaw, 1.3, -0.22, 1.5, aspect);
+		    } else {
+		      // Face HUD: head-locked, 1.1 m ahead and slightly low, about 46 degrees wide.
+		      var fq = pose.transform.orientation, fo = S.qrot(fq, 0, -0.06, -1.1), fw = 0.95;
+		      G.hudPanel = { m: S.qmat(fq, hp.x + fo[0], hp.y + fo[1], hp.z + fo[2]), w: fw, h: fw * aspect };
+		      G.hudYaw = null;
+		    }
 		  } else { G.hudPanel = null; G.hudYaw = null; }
 		  G.lastMode = G.ready ? G.mode : 0;
 		  gd[0] = G.screenPanel ? 2 : (G.hudPanel ? 1 : 0);
@@ -283,8 +330,23 @@ public final class WebXRBridge {
 		    + 'void main(){vec4 c=texture(u_tex,v_uv);c+=vec4(0.0,0.0,0.0,u_back)*(1.0-c.a);c=cur(c,u_c0);c=cur(c,u_c1);o=c;}\\n');
 		  var lp = prog(H + 'uniform mat4 u_vp;uniform vec3 u_a;uniform vec3 u_b;void main(){gl_Position=u_vp*vec4(gl_VertexID==0?u_a:u_b,1.0);}\\n',
 		    H + 'uniform vec4 u_col;out vec4 o;void main(){o=u_col;}\\n');
-		  if (!pp || !lp) { B.ovFailed = true; return false; }
-		  B.ovPanel = pp; B.ovLine = lp; B.ovVao = g.createVertexArray();
+		  // Hand boxes: 36 vertices of a unit cube generated from gl_VertexID; faces turned away from
+		  // the eye are collapsed (the XR layer has no depth buffer), so a single box needs no sorting.
+		  var hpv = prog(H + 'uniform mat4 u_vp;uniform mat4 u_m;uniform vec3 u_c;uniform vec3 u_s;uniform vec3 u_eye;out float v_sh;'
+		    + 'void main(){int f=gl_VertexID/6;int k=gl_VertexID-f*6;int q=k<3?k:(k==3?0:(k==4?2:3));'
+		    + 'vec2 uv=vec2((q==1||q==2)?1.0:-1.0,(q>=2)?1.0:-1.0);int ax=f/2;float sg=(f-ax*2)==0?1.0:-1.0;'
+		    + 'vec3 n=ax==0?vec3(sg,0.0,0.0):(ax==1?vec3(0.0,sg,0.0):vec3(0.0,0.0,sg));'
+		    + 'vec3 p=ax==0?vec3(sg,uv.x,uv.y):(ax==1?vec3(uv.x,sg,uv.y):vec3(uv.x,uv.y,sg));'
+		    + 'vec4 w=u_m*vec4(u_c+0.5*p*u_s,1.0);vec3 wn=normalize(mat3(u_m)*n);'
+		    + 'v_sh=0.55+0.45*max(dot(wn,normalize(vec3(0.3,1.0,0.5))),0.0);'
+		    + 'gl_Position=dot(wn,u_eye-w.xyz)>0.0?u_vp*w:vec4(2.0,2.0,2.0,1.0);}\\n',
+		    H + 'uniform vec3 u_col;in float v_sh;out vec4 o;void main(){o=vec4(u_col*v_sh,1.0);}\\n');
+		  if (!pp || !lp || !hpv) { B.ovFailed = true; return false; }
+		  B.ovPanel = pp; B.ovLine = lp; B.ovHand = hpv; B.ovVao = g.createVertexArray();
+		  B.ovH = {
+		    vp: g.getUniformLocation(hpv, 'u_vp'), m: g.getUniformLocation(hpv, 'u_m'), c: g.getUniformLocation(hpv, 'u_c'),
+		    s: g.getUniformLocation(hpv, 'u_s'), eye: g.getUniformLocation(hpv, 'u_eye'), col: g.getUniformLocation(hpv, 'u_col')
+		  };
 		  B.ovU = {
 		    mvp: g.getUniformLocation(pp, 'u_mvp'), size: g.getUniformLocation(pp, 'u_size'), tex: g.getUniformLocation(pp, 'u_tex'),
 		    back: g.getUniformLocation(pp, 'u_back'), c0: g.getUniformLocation(pp, 'u_c0'), c1: g.getUniformLocation(pp, 'u_c1'),
@@ -295,7 +357,8 @@ public final class WebXRBridge {
 		S.drawOverlays = function (g) {
 		  var G = B.gui, views = B.views, layer = B.layer;
 		  var panel = G.ready && G.tex ? (G.screenPanel || G.hudPanel) : null;
-		  if (!views || !layer || (!panel && !G.lasers.length)) return;
+		  var hands = S.handModels();
+		  if (!views || !layer || (!panel && !G.lasers.length && !hands.length)) return;
 		  if (!S.ensureProgram(g) || !S.ensureOverlay(g)) return;
 		  var bl = [g.getParameter(g.BLEND_SRC_RGB), g.getParameter(g.BLEND_DST_RGB), g.getParameter(g.BLEND_SRC_ALPHA), g.getParameter(g.BLEND_DST_ALPHA),
 		    g.getParameter(g.BLEND_EQUATION_RGB), g.getParameter(g.BLEND_EQUATION_ALPHA)];
@@ -308,11 +371,26 @@ public final class WebXRBridge {
 		      if (!vp) continue;
 		      g.viewport(vp.x, vp.y, vp.width, vp.height);
 		      var pv = S.mul(v.projectionMatrix, v.transform.inverse.matrix);
+		      if (hands.length) {
+		        g.disable(g.BLEND);
+		        g.useProgram(B.ovHand);
+		        g.uniformMatrix4fv(B.ovH.vp, false, pv);
+		        var ep = v.transform.position;
+		        g.uniform3f(B.ovH.eye, ep.x, ep.y, ep.z);
+		        for (var hi = 0; hi < hands.length; ++hi) {
+		          var hb = hands[hi];
+		          g.uniformMatrix4fv(B.ovH.m, false, hb.m);
+		          g.uniform3f(B.ovH.c, hb.c[0], hb.c[1], hb.c[2]); g.uniform3f(B.ovH.s, hb.s[0], hb.s[1], hb.s[2]);
+		          g.uniform3f(B.ovH.col, hb.col[0], hb.col[1], hb.col[2]);
+		          g.drawArrays(g.TRIANGLES, 0, 36);
+		        }
+		        g.enable(g.BLEND);
+		      }
 		      if (panel) {
 		        g.useProgram(B.ovPanel);
 		        g.uniformMatrix4fv(B.ovU.mvp, false, S.mul(pv, S.model(panel)));
 		        g.uniform2f(B.ovU.size, panel.w, panel.h);
-		        g.uniform1f(B.ovU.back, panel === G.screenPanel ? 0.45 : 0.0);
+		        g.uniform1f(B.ovU.back, panel === G.screenPanel ? 0.45 : (panel.back || 0.0));
 		        var c0 = G.cur[0], c1 = G.cur[1];
 		        g.uniform3f(B.ovU.c0, c0 ? c0.u : 0, c0 ? c0.v : 0, c0 ? 1 : 0);
 		        g.uniform3f(B.ovU.c1, c1 ? c1.u : 0, c1 ? c1.v : 0, c1 ? 1 : 0);
@@ -334,6 +412,25 @@ public final class WebXRBridge {
 		  } finally {
 		    g.blendFuncSeparate(bl[0], bl[1], bl[2], bl[3]); g.blendEquationSeparate(bl[4], bl[5]);
 		  }
+		};
+		// Simple Minecraft-style arms at each controller's grip pose (target-ray pose as a fallback):
+		// a skin-coloured hand cube and a sleeve towards the elbow (grip +Z). VR Settings "Show hands"
+		// (showHands: 0 off, 1 both hands, 2 main hand only).
+		S.handModels = function () {
+		  var out = [], mode = S.cfg('showHands', 1) | 0;
+		  if (!mode || !B.stereo) return out;
+		  var main = S.cfg('leftHanded', 0) ? 0 : 1, gp = B.gp, c = B.cd;
+		  for (var s = 0; s < 2; ++s) {
+		    if (mode === 2 && s !== main) continue;
+		    var o = s * 8, q, x, y, z;
+		    if (gp[o]) { q = { x: gp[o + 4], y: gp[o + 5], z: gp[o + 6], w: gp[o + 7] }; x = gp[o + 1]; y = gp[o + 2]; z = gp[o + 3]; }
+		    else if (c[s * 16]) { var co = s * 16; q = { x: c[co + 5], y: c[co + 6], z: c[co + 7], w: c[co + 8] }; x = c[co + 2]; y = c[co + 3]; z = c[co + 4]; }
+		    else continue;
+		    var m = S.qmat(q, x, y, z);
+		    out.push({ m: m, c: [0, 0, 0.015], s: [0.07, 0.07, 0.085], col: [0.84, 0.64, 0.52] });
+		    out.push({ m: m, c: [0, 0, 0.13], s: [0.075, 0.075, 0.15], col: [0.0, 0.62, 0.64] });
+		  }
+		  return out;
 		};
 		// Copies the game's GUI image (drawn over a transparent clear, premultiplied alpha) for the panel.
 		S.copyGui = function (tex, w, h, mode, laser, aim) {
@@ -370,7 +467,7 @@ public final class WebXRBridge {
 		// the same XR frame as the viewer pose. select/squeeze events are OR-ed in so
 		// sources without a gamepad (e.g. tracked hands pinching) can still act.
 		S.captureInputs = function (frame) {
-		  var c = B.cd; c.fill(0);
+		  var c = B.cd; c.fill(0); B.gp.fill(0);
 		  var b = null;
 		  function bv(k) { var x = b[k]; return x ? Math.max(x.value || 0, x.pressed ? 1 : 0) : 0; }
 		  var list = frame.session.inputSources;
@@ -394,6 +491,14 @@ public final class WebXRBridge {
 		    c[o + 11] = (ax.length >= 4 ? ax[2] : (ax.length >= 2 ? ax[0] : 0)) || 0;
 		    c[o + 12] = (ax.length >= 4 ? ax[3] : (ax.length >= 2 ? ax[1] : 0)) || 0;
 		    c[o + 13] = bv(4); c[o + 14] = bv(5); c[o + 15] = bv(3);
+		    if (s.gripSpace) {
+		      var gpo = frame.getPose(s.gripSpace, B.ref);
+		      if (gpo) {
+		        var go = slot * 8, gpp = gpo.transform.position, gq = gpo.transform.orientation;
+		        B.gp[go] = 1; B.gp[go + 1] = gpp.x; B.gp[go + 2] = gpp.y; B.gp[go + 3] = gpp.z;
+		        B.gp[go + 4] = gq.x; B.gp[go + 5] = gq.y; B.gp[go + 6] = gq.z; B.gp[go + 7] = gq.w;
+		      }
+		    }
 		  }
 		};
 		S.hookInputEvents = function (s) {
@@ -439,7 +544,7 @@ public final class WebXRBridge {
 		  var wasStereo = B.stereo || B.pending;
 		  B.stereo = false; B.pending = false;
 		  if (B.session && B.session.__eaglerStereo) { B.session = null; B.ref = null; B.active = false; }
-		  B.layer = null; B.sd[0] = 0; B.cd.fill(0);
+		  B.layer = null; B.sd[0] = 0; B.cd.fill(0); B.gp.fill(0);
 		  if (B.gl) { try { S.freeAtlas(B.gl); S.freeGui(B.gl); } catch (e) { } }
 		  B.views = null; B.gd.fill(0); B.gui.mode = 0; B.gui.lastMode = 0; B.gui.screenPanel = null; B.gui.hudPanel = null; B.gui.hudYaw = null; B.gui.lasers = []; B.gui.cur = [null, null];
 		  S.flushVsync();
@@ -516,7 +621,7 @@ public final class WebXRBridge {
 		  B.probed = true;
 		  try {
 		    if (!(globalThis.navigator && navigator.xr && typeof navigator.xr.isSessionSupported === 'function')) return;
-		    navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { B.xrOk = false; });
+		    navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; B.xrKnown = true; S.updateButton(); }, function () { B.xrOk = false; B.xrKnown = true; });
 		    if (navigator.xr.addEventListener) navigator.xr.addEventListener('devicechange', function () {
 		      try { navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { B.xrOk = !!ok; S.updateButton(); }, function () { }); } catch (e) { }
 		    });
@@ -573,6 +678,23 @@ public final class WebXRBridge {
 		+ "try{var s=globalThis.localStorage&&localStorage.getItem('eaglerxr.'+key);if(s==='true')return 1;if(s==='false')return 0;if(s!==null&&s!==undefined&&s!==''&&isFinite(+s))return +s;}catch(e){}"
 		+ "return def;")
 	public static native double configValue(String key, double def);
+
+	/**
+	 * Persists a VR option to {@code localStorage['eaglerxr.' + key]} and drops the JS-side option
+	 * cache so the web layer (HUD placement, hands) picks it up on the next XR frame. A value set in
+	 * {@code globalThis.eaglerXRConfig} still wins, as with {@link #configValue}.
+	 */
+	@JSBody(params = { "key", "value" }, script = "try{if(globalThis.localStorage)localStorage.setItem('eaglerxr.'+key,String(value));}catch(e){}"
+		+ "var B=globalThis.__eaglerXR;if(B)B.cfgCache=null;")
+	public static native void setConfigValue(String key, double value);
+
+	/**
+	 * Immersive-VR support for the title-screen button: starts the (deferred) isSessionSupported
+	 * probe if it has not run yet; returns -1 while unknown, 0 unsupported, 1 supported.
+	 */
+	@JSBody(script = "var B=globalThis.__eaglerXR;if(!B||!B.stereoApi)return -1;try{if(!B.probed)B.stereoApi.probe();}catch(e){return 0;}"
+		+ "return B.xrKnown?(B.xrOk?1:0):(B.probed&&!(globalThis.navigator&&navigator.xr)?0:-1);")
+	public static native int immersiveSupportState();
 
 	/** Queues {@code cb} for the next XR animation frame; returns false when no stereo session is presenting. */
 	@JSBody(params = { "cb" }, script = "var B=globalThis.__eaglerXR;try{return !!(B&&B.stereoApi&&B.stereoApi.requestFrame(cb));}catch(e){return false;}")

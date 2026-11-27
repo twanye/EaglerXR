@@ -145,9 +145,10 @@ Right-handed (main = right controller, off = left). `leftHanded` swaps hands.
 - After switching between game and menu input, buttons are ignored until all
   are released (so the trigger that clicks "Back to Game" doesn't also attack).
 - One controller only: its stick walks, no turning, no off-hand actions.
-- **Options** (no in-game VR settings screen yet). Read when a VR session
-  starts from `globalThis.eaglerXRConfig.<key>` (number or boolean), else
-  `localStorage["eaglerxr.<key>"]`:
+- **Options**: set them in **Options > VR Settings...** (or **VR Settings...** in
+  the pause menu while in VR), see "VR features" below. They are stored in
+  `localStorage["eaglerxr.<key>"]`; `globalThis.eaglerXRConfig.<key>` (number or
+  boolean) overrides the stored value:
 
   | Key | Default | Meaning |
   | --- | --- | --- |
@@ -158,8 +159,14 @@ Right-handed (main = right controller, off = left). `leftHanded` swaps hands.
   | `autoSprint` | `1` | sprint when the stick is pushed past the threshold |
   | `sprintThreshold` | `0.9` | auto-sprint threshold |
   | `leftHanded` | `0` | 1 = swap hands (main = left) |
+  | `hudMode` | `0` | HUD placement: 0 face (head-locked), 1 hand (off-hand), 2 floating |
+  | `showHands` | `1` | hands: 0 off, 1 both, 2 main hand only |
+  | `roomscaleBreaking` | `1` | swing to mine / attack |
+  | `hurtCamComfort` | `1` | 1 = no damage tilt/shake in the headset (Vivecraft default) |
+  | `vivecraftNetwork` | `0` | 1 = speak the Vivecraft server protocol (experimental) |
 
-  Example: `localStorage.setItem('eaglerxr.smoothTurn', '1')`, then re-enter VR.
+  Changes made in the VR Settings screen apply immediately (no need to re-enter VR).
+  Example from the console: `localStorage.setItem('eaglerxr.smoothTurn', '1')`, then re-enter VR.
 
 #### VR menus and HUD
 
@@ -192,6 +199,112 @@ Right-handed (main = right controller, off = left). `leftHanded` swaps hands.
 - The desktop canvas mirror shows only the GUI (over black) while presenting.
 - Desktop (not presenting): no change; the GUI pass and HUD are untouched.
 
+
+### VR features (webxr-vr-features stage)
+
+Credits: behaviour modelled on **Vivecraft** (github.com/Vivecraft/VivecraftMod,
+LGPL-3.0: HUD lock, roomscale swinging, hurt-camera comfort, server protocol) and
+**Visor** (VisorModStudio/Visor, branch `dev`, MPL-2.0: control scheme, settings).
+Everything is reimplemented for this port; no code from either project is copied.
+
+#### Enter VR on the title screen
+
+The title (main) menu has an **Enter VR** button under Options / Credits. It is
+hidden until `navigator.xr.isSessionSupported('immersive-vr')` answers true (the
+query starts when the title screen opens, after loading, so the Quest load fix is
+unaffected); while presenting it reads **Exit VR**. In VR without a world the
+headset shows the menus on the floating screen panel over black. The pause-menu
+button and the floating DOM button still work.
+
+#### HUD placement (face / hand / floating)
+
+Like Vivecraft's HUD lock, VR Settings > **HUD** picks where the in-game HUD
+(hotbar, hearts, chat...) is drawn; the web layer places the same GUI image:
+- **Face** (default): head-locked, 1.1 m ahead and 6 cm low, 0.95 m wide (~46 deg).
+- **Hand**: a 0.3 m panel lying on the back of the off-hand controller (10 cm above
+  the controller, 10 cm towards the wrist), tilted 30 deg towards you; raise your
+  off hand and look at it. Falls back to Face when the off controller is not tracked.
+- **Floating**: the previous panel, 1.3 m ahead and lower, following head yaw lazily.
+Menus/screens still use the room-fixed screen panel.
+
+#### Visible hands
+
+The web layer draws a simple Minecraft-style arm at each controller's **grip
+pose** (target-ray pose if no grip space): a skin-coloured hand cube (7 cm) and a
+teal sleeve towards the elbow, flat-shaded. Drawn per eye after the world, before
+the HUD panel and lasers, without depth testing (the XR layer has no depth
+buffer; back faces are dropped in the vertex shader). VR Settings > **Hands**:
+Off / Both (default) / Main hand. The held item is not drawn in the hand yet.
+
+#### VR Settings screen
+
+`VRSettingsScreen` (an options sub-screen, reachable from **Options > VR
+Settings...** whenever the browser has `navigator.xr`, and from the pause menu
+while in VR) exposes every `eaglerxr.*` option above with normal Minecraft
+buttons/sliders (usable with the controller laser). Each change is written to
+localStorage at once and reloaded by `XRControllerInput26` / the web layer.
+
+#### Roomscale breaking and attacking (Vivecraft-style)
+
+Reimplemented from Vivecraft's `SwingTracker` (no code copied), once per game
+tick: the main controller's "tip" (0.3 m along its ray) is tracked in room space
+for speed and in the world for hits.
+- A swing faster than **2.5 m/s** (x1.5 in creative) through an entity hitbox
+  (+0.3 m margin) attacks that entity once per swing (`gameMode.attack`, arm swing).
+- A fast swing that **enters a block from outside** starts mining it and adds 3-7
+  ticks of progress (faster swing = more), so repeated swings mine it; creative
+  breaks it at once. Between swings the vanilla "attack released" path does not
+  abort the progress for 1.5 s.
+- Reach is still checked from the eye (`isWithin{Block,Entity}InteractionRange`
+  with a 1 block buffer); nothing happens while the trigger (attack) is held, with
+  a screen open, or in spectator. Trigger-to-attack/mine works as before.
+- VR Settings > **Roomscale breaking** turns it off.
+
+#### Hurt camera comfort
+
+Eye passes never applied view bobbing; the damage tilt/shake (`bobHurt`) is also
+skipped while **Hurt camera comfort** is on (default, as in Vivecraft). Turning it
+off re-applies vanilla `bobHurt` to each eye.
+
+#### Vivecraft server protocol (experimental, off by default)
+
+`VivecraftNetwork26` speaks the client side of Vivecraft's plugin channel
+`vivecraft:data` (reimplemented from VivecraftMod branch `Multiloader-26.3`,
+`org.vivecraft.common.network`; no code copied). Enable with VR Settings >
+**Vivecraft server support**; it takes effect on the next join.
+
+Transport: `ServerboundCustomPayloadPacket` / `ClientboundCustomPayloadPacket`
+normally turn unknown channels into `DiscardedPayload` (bytes dropped); the
+fallback now maps `vivecraft:data` and `minecraft:register` to `EaglerRawPayload`
+(raw bytes). Eaglercraft multiplayer sends ordinary play-phase packets over the
+WebSocket to the Eagler proxy (EaglerXServer/EaglerXBungee/Velocity), which
+forwards play packets, including plugin messages, to the backend server.
+
+| Step | Payload (`[ordinal byte][body]`) | Status |
+| --- | --- | --- |
+| On login / dimension change | C2S `minecraft:register` "vivecraft:data" | verified from source (Bukkit-style channel registration) |
+| | C2S VERSION (0): `"Vivecraft-26.2-eaglerxr-0.1.0 VR\n0\n0"` (version, VR/NONVR, max/min network protocol) | format verified from VivecraftMod source |
+| Server reply | S2C VERSION (0) = server has Vivecraft; REQUESTDATA (1) = send poses; NETWORK_VERSION (15) = protocol | verified from source |
+| Every tick in VR | C2S WORLDSCALE (5) / HEIGHT (12) = 1.0 once; VR_PLAYER_STATE (18): `seated=false, hmd, leftHanded, main, leftHanded, off` | format verified; values are our mapping |
+| Legacy server (no NETWORK_VERSION) | HEADDATA (2), CONTROLLER0DATA (3), CONTROLLER1DATA (4) | format verified from the current mod's legacy readers; old plugin versions not checked |
+| VR on/off | C2S IS_VR_ACTIVE (17) bool | verified format; server only applies it if it allows VR switching |
+| Other VR players | S2C UBERPACKET (8) `UUID, state, worldScale, heightScale` | parsed and stored, **not rendered yet** |
+
+A pose is position (3 floats, metres relative to the player's feet, world axes)
+then the orientation quaternion as **w, x, y, z** (local -Z = forward/pointing);
+big-endian floats. We claim network protocol 0 (NEW_NETWORKING) only, so the
+server does not expect full-body tracking, dual wielding, head-aim or roomscale
+attack packets. Our head position is always the player's eye (no room-scale head
+position yet); hand poses use the controller target ray.
+
+Guessed / unverified: nothing has been tested against a real Vivecraft server or
+a Vivecraft client; whether the Eagler proxy forwards `vivecraft:data` both ways
+unchanged; whether old Vivecraft Spigot Extensions accept the `\n0\n0` version
+suffix (current Vivecraft does); that the server-side effects of being a VR player
+(Vivecraft servers aim projectiles/interaction from the VR hand) feel right with
+this port's head-driven look. **Visor** does not use this protocol: it has its own
+`visor:channel` (handshake + pose buffers) and needs the Visor mod on the server;
+not implemented.
 
 ### Quest load safety and on-headset diagnostics (load-fix stage)
 
@@ -258,7 +371,7 @@ Known gaps:
   stage) the player's yaw/pitch; mouse pitch is ignored while presenting.
 - Third-person camera: stereo works but head rotation is not applied to the
   camera (the player's look still follows the head).
-- No first-person hand / held item and no controller model in the headset.
+- Hands are simple boxes (no held item, no controller model, no skin texture).
   Glowing-entity outlines, post effects and debug gizmos only appear in the
   last eye / mirror.
 - VR controls, menus and HUD (stage above) are untested on hardware. Verify:
@@ -270,11 +383,14 @@ Known gaps:
   click, `[4]` A/X, `[5]` B/Y); the snap-turn / head-yaw sign conventions; and
   that look-follows-head does not fight vehicles (boats clamp the rider yaw).
 - Not done from Visor: radial hotbar on the hand (grip steps slots instead),
-  two-handed / off-hand interaction, physical (roomscale) swinging, climbing,
+  two-handed / off-hand interaction, off-hand roomscale swinging, climbing,
   teleport locomotion, VR keyboard (chat/sign/anvil text entry has no input
-  in the headset; the desktop keyboard still works), a VR settings screen
-  (options come from `eaglerXRConfig` / localStorage), seated mode, world
+  in the headset; the desktop keyboard still works), seated mode, world
   scale, haptics.
+- VR features stage (title Enter VR, HUD modes, hands, VR Settings, roomscale,
+  hurt-camera toggle, Vivecraft protocol) is CI-compiled only; verify on Quest:
+  hand box orientation on the grip pose, Hand HUD placement/legibility, the
+  2.5 m/s swing threshold, and that settings sliders are usable with the laser.
 - Toggle-sprint / toggle-sneak vanilla options: the VR bindings press and
   release the key mappings, so with "toggle" set each press flips the state.
 - In-game laser and lasers in menus are 1 px lines without depth testing; the
