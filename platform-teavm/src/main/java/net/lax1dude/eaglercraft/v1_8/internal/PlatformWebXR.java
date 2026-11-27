@@ -286,9 +286,8 @@ public final class PlatformWebXR {
 	}
 
 	public static float getConfig(final String key, final float def) {
-		if (!installed || disabled) {
-			return def;
-		}
+		// Options are plain localStorage values: readable on the title / options screens too,
+		// before the VR runtime is installed.
 		double v;
 		try {
 			v = WebXRBridge.configValue(key, def);
@@ -296,5 +295,39 @@ public final class PlatformWebXR {
 			return def;
 		}
 		return Double.isNaN(v) || Double.isInfinite(v) ? def : (float) v;
+	}
+
+	public static void setConfig(final String key, final float value) {
+		try {
+			WebXRBridge.setConfigValue(key, value);
+		} catch (Throwable t) {
+			// localStorage unavailable: the option only lasts until the next read.
+		}
+	}
+
+	/** True when the browser exposes navigator.xr (does not install the VR runtime). */
+	public static boolean hasWebXR() {
+		if (disabled) {
+			return false;
+		}
+		try {
+			return WebXRBridge.isSupported() && !WebXRBridge.isDisabledByUser();
+		} catch (Throwable t) {
+			return false;
+		}
+	}
+
+	public static int getImmersiveSupport() {
+		if (!hasWebXR()) {
+			return 0;
+		}
+		if (!ensureInstalled()) {
+			return 0;
+		}
+		try {
+			return WebXRBridge.immersiveSupportState();
+		} catch (Throwable t) {
+			return 0;
+		}
 	}
 }

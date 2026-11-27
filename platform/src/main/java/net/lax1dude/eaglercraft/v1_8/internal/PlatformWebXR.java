@@ -152,4 +152,21 @@ public final class PlatformWebXR {
 	public static float getConfig(final String key, final float def) {
 		return def;
 	}
+
+	/** Persists a VR option (web: localStorage "eaglerxr.KEY"); no-op on desktop. */
+	public static void setConfig(final String key, final float value) {
+	}
+
+	/** True when the browser exposes WebXR at all (navigator.xr); never installs the VR runtime. */
+	public static boolean hasWebXR() {
+		return false;
+	}
+
+	/**
+	 * Whether immersive-vr sessions are supported, for the title-screen Enter VR button: starts the
+	 * browser query on first call; -1 while unknown, 0 no, 1 yes.
+	 */
+	public static int getImmersiveSupport() {
+		return 0;
+	}
 }

@@ -135,6 +135,19 @@ public class TitleScreen extends Screen {
             }
          }).bounds(this.width / 2 + 2, topPos, 98, 20).build()
       );
+      // EaglerXR: Enter VR / Exit VR on the title screen, shown once the browser reports
+      // immersive-vr support (the query starts here, after loading, and answers asynchronously).
+      this.eaglerVRButton = this.addRenderableWidget(Button.builder(Component.literal("Enter VR"), button -> {
+         if (net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting()) {
+            net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.exitVR();
+         } else if (!net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.requestEnterVR()) {
+            String status = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.getStatusMessage();
+            button.setMessage(Component.literal(status != null ? status : "VR unavailable"));
+            button.active = false;
+         }
+      }).bounds(this.width / 2 - 100, topPos + 24, 200, 20).build());
+      this.eaglerVRPresenting = false;
+      this.eaglerUpdateVRButton();
       this.addRenderableWidget(
          new PlainTextButton(
             copyrightX,
@@ -166,6 +179,29 @@ public class TitleScreen extends Screen {
 	         autoTestFired = true;
 	         net.minecraft.client.gui.screens.worldselection.CreateWorldScreen.openFresh(this.minecraft, () -> {});
 	      }
+   }
+
+   private @Nullable Button eaglerVRButton;
+   private boolean eaglerVRPresenting;
+
+   @Override
+   public void tick() {
+      super.tick();
+      this.eaglerUpdateVRButton();
+   }
+
+   /** EaglerXR: shows the VR button only when immersive-vr is supported; flips its label while presenting. */
+   private void eaglerUpdateVRButton() {
+      if (this.eaglerVRButton == null) {
+         return;
+      }
+      boolean presenting = net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.isPresenting();
+      this.eaglerVRButton.visible = presenting || net.lax1dude.eaglercraft.v1_8.internal.PlatformWebXR.getImmersiveSupport() == 1;
+      if (presenting != this.eaglerVRPresenting) {
+         this.eaglerVRPresenting = presenting;
+         this.eaglerVRButton.setMessage(Component.literal(presenting ? "Exit VR" : "Enter VR"));
+         this.eaglerVRButton.active = true;
+      }
    }
 
    // Eagler headless autotest latch (init() re-runs on resize)
